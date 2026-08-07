@@ -680,11 +680,11 @@ function processData() {
   // Save intermediate data for re-filtering
   cachedProcessData = { personData, personNames, dimCols, tagCols, ratingFormat, hasFactors, headers, config, promptCount, personCount };
 
+  // Show person filter first
+  showPersonFilter(personNames);
+
   // Generate results with all persons
   generateResults(personData, personNames, dimCols, tagCols, ratingFormat, hasFactors, headers, config, promptCount, personCount);
-
-  // Show person filter
-  renderPersonFilter(personNames);
 }
 
 function generateResults(personData, personNames, dimCols, tagCols, ratingFormat, hasFactors, headers, config, promptCount, personCount) {
@@ -1018,7 +1018,7 @@ function computePersonalSummary(personData, dimCols, ratingFormat, personNames, 
 }
 
 // Person filter
-function renderPersonFilter(personNames) {
+function showPersonFilter(personNames) {
   const panel = document.getElementById('personFilter');
   panel.style.display = 'block';
   const list = document.getElementById('personFilterList');
