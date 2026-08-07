@@ -98,6 +98,21 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
 .history-item-actions button.load { border-color: #4f8cf7; color: #4f8cf7; }
 .history-item-actions button.delete { border-color: #ef5350; color: #ef5350; }
 .history-empty { text-align: center; padding: 20px; color: #999; font-size: 13px; }
+
+.config-dim-panel { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.config-dim-panel h2 { font-size: 16px; margin-bottom: 4px; color: #333; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.config-dim-panel h2::before { content: '▶'; font-size: 11px; transition: transform 0.2s; }
+.config-dim-panel.expanded h2::before { transform: rotate(90deg); }
+.config-dim-body { display: none; margin-top: 16px; }
+.config-dim-panel.expanded .config-dim-body { display: block; }
+.config-dim-body .dim-section { margin-bottom: 16px; }
+.config-dim-body .dim-section label { font-size: 13px; font-weight: 600; color: #444; display: block; margin-bottom: 4px; }
+.config-dim-body .dim-section .hint { font-size: 11px; color: #888; margin-bottom: 4px; }
+.config-dim-body textarea { width: 100%; min-height: 60px; padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; font-family: monospace; resize: vertical; }
+.config-dim-body .preset-btns { display: flex; gap: 8px; margin-bottom: 12px; }
+.config-dim-body .preset-btns button { padding: 5px 12px; font-size: 12px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; background: #f8f8f8; }
+.config-dim-body .preset-btns button:hover { background: #e8e8e8; }
+.config-dim-body .preset-btns button.active { background: #4f8cf7; color: #fff; border-color: #4f8cf7; }
 </style>
 </head>
 <body>
@@ -146,6 +161,38 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
     </div>
   </div>
 
+  <div class="config-dim-panel" id="dimPanel">
+    <h2 id="dimPanelToggle">维度与标签配置</h2>
+    <div class="config-dim-body">
+      <div class="preset-btns">
+        <button onclick="loadPreset('t2v')" id="presetT2v">T2V 预设</button>
+        <button onclick="loadPreset('t2av')" id="presetT2av">T2AV 预设</button>
+        <button onclick="loadPreset('wm')" id="presetWm">WM 预设</button>
+        <button onclick="saveCustomConfig()" style="margin-left:auto; background:#5c6bc0; color:#fff; border-color:#5c6bc0;">保存配置</button>
+      </div>
+      <div class="dim-section">
+        <label>一级维度（每行一个维度名称，需与 Excel 表头完全一致）</label>
+        <div class="hint">这些名称会用来匹配上传 Excel 的列名</div>
+        <textarea id="cfgDimensions" rows="6"></textarea>
+      </div>
+      <div class="dim-section">
+        <label>标签体系（每行格式：标签名称 | 是否多选(yes/no) | 标签值列表(逗号分隔)）</label>
+        <div class="hint">标签名称需与 Excel 表头一致。标签值为完整列表，数据中未出现的值会显示为 0。</div>
+        <textarea id="cfgTags" rows="7"></textarea>
+      </div>
+      <div class="dim-section">
+        <label>二级维度（每行格式：一级维度名 | 二级维度列表(逗号分隔)）</label>
+        <div class="hint">即影响因素的完整选项列表。数据中未出现的二级维度会显示为 0。</div>
+        <textarea id="cfgSecondaryDims" rows="6"></textarea>
+      </div>
+      <div class="dim-section">
+        <label>打分选项格式</label>
+        <div class="hint">四个选项，按 Good / As good / As bad / Bad 顺序，用 | 分隔</div>
+        <textarea id="cfgRatingFormat" rows="1" style="min-height:32px;"></textarea>
+      </div>
+    </div>
+  </div>
+
   <div class="upload-area" id="uploadArea">
     <div class="icon">📊</div>
     <h3>点击或拖拽上传 Excel 文件</h3>
@@ -176,10 +223,147 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
 </div>
 
 <script>
-const RATING_VALUES = {
-  t2v: { good: 'G (Good)', as_good: 'As good', as_bad: 'As bad', bad: 'B (Bad)' },
-  wm: { good: 'G（Good）', as_good: 'AS good', as_bad: 'AS bad', bad: 'B（Bad）' }
+const PRESETS = {
+  t2v: {
+    dimensions: ['指令遵从与增益', '动态与物理合理性', '镜头语言与跨镜连贯', '视觉美学', '综合评价'],
+    secondaryDims: {
+      '指令遵从与增益': ['主体遵从', '动作/事件遵从', '属性遵从', '风格/氛围遵从', '镜头指令遵从', '意图增益度'],
+      '动态与物理合理性': ['运动结构合理性', '物理与常识合理性', '时序稳定性', '运动强度适配'],
+      '镜头语言与跨镜连贯': ['跨镜头主体一致性', '跨镜头时空连贯性', '分镜合理性', '运镜质量'],
+      '视觉美学': ['真实感', '整体协调性', '主体美感', '构图', '光影质感', '色彩表现', '场景/环境美感'],
+      '综合评价': ['指令遵从与增益', '动态与物理合理性', '镜头语言与跨镜连贯', '视觉美学']
+    },
+    tags: [
+      { name: '主体类型', multi: true, values: ['人物', '动物', '物体', '自然景观', '人造空间', '抽象形体', '文字为主'] },
+      { name: '人物运动', multi: true, values: ['日常行为', '社会互动', '运动/体育', '表演/艺术', '极限动作', '精细操作', '情绪/表情'] },
+      { name: '能力专项', multi: false, values: ['动漫动画', '多个体/群体画面', '属性绑定', '打斗场景', '文字生成', '材质质感', '画面构图', '概念重组', '视觉特效', '风格化'] },
+      { name: '非人运动', multi: false, values: ['静态/微动', '刚体位移', '动物运动', '流体/软体', '形态变化'] },
+      { name: 'prompt类型', multi: false, values: ['简单/开放', '叙述性描述', '专业影视语言', '分镜脚本'] },
+      { name: '镜头语言', multi: true, values: ['运镜', '多镜头', '时间操控'] }
+    ],
+    ratingFormat: { good: 'G (Good)', as_good: 'As good', as_bad: 'As bad', bad: 'B (Bad)' }
+  },
+  t2av: {
+    dimensions: ['指令遵从与增益', '动态与物理合理性', '镜头语言与跨镜连贯', '视觉美学', '声音效果', '综合评价'],
+    secondaryDims: {
+      '指令遵从与增益': ['主体遵从', '动作/事件遵从', 'speech指令遵从', '属性遵从', '风格/氛围遵从', 'BGM/音效指令遵从', '镜头指令遵从', '意图增益度'],
+      '动态与物理合理性': ['运动结构合理性', '物理与常识合理性', '时序稳定性', '运动强度适配'],
+      '镜头语言与跨镜连贯': ['跨镜头主体一致性', '跨镜头时空连贯性', '分镜合理性', '运镜质量'],
+      '视觉美学': ['真实感', '整体协调性', '主体美感', '构图', '光影质感', '色彩表现', '场景/环境美感'],
+      '声音效果': ['基础音频音质', '音画同步与声源匹配', '多镜头音频连续性', '声音真实感与表现力'],
+      '综合评价': ['指令遵从与增益', '动态与物理合理性', '镜头语言与跨镜连贯', '视觉美学', '声音效果']
+    },
+    tags: [
+      { name: '主体类型', multi: true, values: ['人物', '动物', '物体', '自然景观', '人造空间', '抽象形体', '文字为主'] },
+      { name: '人物运动', multi: true, values: ['日常行为', '社会互动', '运动/体育', '表演/艺术', '极限动作', '精细操作', '情绪/表情'] },
+      { name: '能力专项', multi: false, values: ['动漫动画', '多个体/群体画面', '属性绑定', '打斗场景', '文字生成', '材质质感', '画面构图', '概念重组', '视觉特效', '风格化'] },
+      { name: '非人运动', multi: false, values: ['静态/微动', '刚体位移', '动物运动', '流体/软体', '形态变化'] },
+      { name: 'prompt类型', multi: false, values: ['简单/开放', '叙述性描述', '专业影视语言', '分镜脚本'] },
+      { name: '镜头语言', multi: true, values: ['运镜', '多镜头', '时间操控'] }
+    ],
+    ratingFormat: { good: 'G (Good)', as_good: 'As good', as_bad: 'As bad', bad: 'B (Bad)' }
+  },
+  wm: {
+    dimensions: ['语义跟随', '初始世界一致性', '运动性', '空间时序一致性', '视觉美学', '综合评价'],
+    secondaryDims: {
+      '语义跟随': ['核心动作达成度', '运动控制遵从度', '指令歧义处理', '主体属性匹配'],
+      '初始世界一致性': ['初始画面还原度', '初始主体一致性', '初始场景与空间一致性'],
+      '运动性': ['动态程度', '运动连续性与稳定性', '运动物理合理性'],
+      '空间时序一致性': ['空间一致性', '主体一致性', '长时稳定性', '未观测区域推理'],
+      '视觉美学': ['成像质量', '美学质量', '风格忠实与一致性', '表观真实感'],
+      '综合评价': ['语义跟随', '初始世界一致性', '运动性', '空间时序一致性', '视觉美学']
+    },
+    tags: [
+      { name: 'task_type', multi: false, values: ['autonomous_driving', 'embodied_robot', 'indoor_home', 'multi_social', 'natural_outdoor', 'virtual_world'] }
+    ],
+    ratingFormat: { good: 'G（Good）', as_good: 'AS good', as_bad: 'AS bad', bad: 'B（Bad）' }
+  }
 };
+
+const CONFIG_STORAGE_KEY = 'eval_tool_config';
+
+function getActiveConfig() {
+  const dims = document.getElementById('cfgDimensions').value.trim().split('\n').map(s => s.trim()).filter(Boolean);
+  const tagsRaw = document.getElementById('cfgTags').value.trim().split('\n').map(s => s.trim()).filter(Boolean);
+  const tags = tagsRaw.map(line => {
+    const parts = line.split('|').map(s => s.trim());
+    const values = parts[2] ? parts[2].split(',').map(s => s.trim()).filter(Boolean) : [];
+    return { name: parts[0], multi: parts[1] === 'yes', values };
+  });
+  const ratingParts = document.getElementById('cfgRatingFormat').value.trim().split('|').map(s => s.trim());
+  const ratingFormat = {
+    good: ratingParts[0] || 'G (Good)',
+    as_good: ratingParts[1] || 'As good',
+    as_bad: ratingParts[2] || 'As bad',
+    bad: ratingParts[3] || 'B (Bad)'
+  };
+  // Parse secondary dimensions
+  const secDimsRaw = document.getElementById('cfgSecondaryDims').value.trim().split('\n').map(s => s.trim()).filter(Boolean);
+  const secondaryDims = {};
+  for (const line of secDimsRaw) {
+    const parts = line.split('|').map(s => s.trim());
+    if (parts.length >= 2) {
+      secondaryDims[parts[0]] = parts[1].split(',').map(s => s.trim()).filter(Boolean);
+    }
+  }
+  return { dimensions: dims, tags, ratingFormat, secondaryDims };
+}
+
+function loadPreset(name) {
+  const preset = PRESETS[name];
+  if (!preset) return;
+  document.getElementById('cfgDimensions').value = preset.dimensions.join('\n');
+  document.getElementById('cfgTags').value = preset.tags.map(t =>
+    `${t.name} | ${t.multi ? 'yes' : 'no'} | ${t.values.join(',')}`
+  ).join('\n');
+  document.getElementById('cfgRatingFormat').value = `${preset.ratingFormat.good} | ${preset.ratingFormat.as_good} | ${preset.ratingFormat.as_bad} | ${preset.ratingFormat.bad}`;
+  document.getElementById('cfgSecondaryDims').value = Object.entries(preset.secondaryDims).map(
+    ([dim, subs]) => `${dim} | ${subs.join(',')}`
+  ).join('\n');
+  document.querySelectorAll('.preset-btns button[id^="preset"]').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById('preset' + name.charAt(0).toUpperCase() + name.slice(1));
+  if (btn) btn.classList.add('active');
+  saveCustomConfig();
+}
+
+function saveCustomConfig() {
+  const config = getActiveConfig();
+  localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(config));
+  showStatus('success', '配置已保存');
+}
+
+function loadSavedConfig() {
+  const saved = localStorage.getItem(CONFIG_STORAGE_KEY);
+  if (saved) {
+    try {
+      const config = JSON.parse(saved);
+      document.getElementById('cfgDimensions').value = config.dimensions.join('\n');
+      document.getElementById('cfgTags').value = config.tags.map(t =>
+        `${t.name} | ${t.multi ? 'yes' : 'no'}${t.values && t.values.length ? ' | ' + t.values.join(',') : ''}`
+      ).join('\n');
+      const rf = config.ratingFormat;
+      document.getElementById('cfgRatingFormat').value = `${rf.good} | ${rf.as_good} | ${rf.as_bad} | ${rf.bad}`;
+      if (config.secondaryDims) {
+        document.getElementById('cfgSecondaryDims').value = Object.entries(config.secondaryDims).map(
+          ([dim, subs]) => `${dim} | ${subs.join(',')}`
+        ).join('\n');
+      }
+      return;
+    } catch {}
+  }
+  loadPreset('t2v');
+}
+
+// Toggle config panel
+document.getElementById('dimPanelToggle').addEventListener('click', () => {
+  document.getElementById('dimPanel').classList.toggle('expanded');
+});
+
+// Scene select auto-loads preset
+document.getElementById('sceneSelect').addEventListener('change', (e) => {
+  const val = e.target.value;
+  if (val !== 'auto' && PRESETS[val]) loadPreset(val);
+});
 
 let workbookData = null;
 let results = null;
@@ -243,20 +427,32 @@ function processData() {
   const headers = rawSheet[0];
   const dataRows = rawSheet.slice(1).filter(r => r[0] != null);
 
-  // Detect scene
+  // Detect scene and determine config
   const sceneSelect = document.getElementById('sceneSelect').value;
+  let config;
   if (sceneSelect === 'auto') {
     detectedScene = headers.includes('task_type') ? 'wm' : 't2v';
+    // Use preset directly for reliability
+    const preset = PRESETS[detectedScene];
+    config = {
+      dimensions: preset.dimensions,
+      tags: preset.tags,
+      ratingFormat: preset.ratingFormat
+    };
+    loadPreset(detectedScene);
   } else {
     detectedScene = sceneSelect;
+    config = getActiveConfig();
   }
 
-  const ratingFormat = detectedScene === 'wm' ? RATING_VALUES.wm : RATING_VALUES.t2v;
+  const ratingFormat = config.ratingFormat;
 
-  // Find dimension columns
-  const dimCols = findDimensionColumns(headers, detectedScene);
-  // Find tag columns
-  const tagCols = findTagColumns(headers, detectedScene);
+  // Find dimension columns from config
+  const dimCols = findDimensionColumns(headers, config.dimensions);
+  // Find tag columns from config
+  const tagCols = findTagColumns(headers, config.tags);
+
+  if (dimCols.length === 0) throw new Error('未找到匹配的维度列，请检查配置中的维度名称是否与 Excel 表头一致');
 
   // Detect prompt count and person count
   const seqCol = 0;
@@ -297,23 +493,19 @@ function processData() {
     ratingFormat,
     hasFactors,
     summary: computeSummary(personData, dimCols, ratingFormat, promptCount, personNames),
-    dimensionBreakdown: computeDimensionBreakdown(personData, dimCols, tagCols, ratingFormat, headers),
+    dimensionBreakdown: computeDimensionBreakdown(personData, dimCols, tagCols, ratingFormat, headers, config.tags),
     personalSummary: computePersonalSummary(personData, dimCols, ratingFormat, personNames, promptCount),
   };
 
   if (hasFactors) {
-    results.factorSummary = computeFactorSummary(personData, dimCols, ratingFormat);
+    results.factorSummary = computeFactorSummary(personData, dimCols, ratingFormat, config.secondaryDims);
   }
 
   renderResults();
 }
 
-function findDimensionColumns(headers, scene) {
+function findDimensionColumns(headers, knownDims) {
   const dims = [];
-  const knownDims = scene === 'wm'
-    ? ['语义跟随', '初始世界一致性', '运动性', '空间时序一致性', '视觉美学', '综合评价']
-    : ['指令遵从与增益', '动态与物理合理性', '镜头语言与跨镜连贯', '视觉美学', '综合评价'];
-
   for (const dim of knownDims) {
     const idx = headers.indexOf(dim);
     if (idx >= 0) {
@@ -327,32 +519,20 @@ function findDimensionColumns(headers, scene) {
   return dims;
 }
 
-function findTagColumns(headers, scene) {
+function findTagColumns(headers, tagDefs) {
   const tags = [];
-  if (scene === 'wm') {
-    const idx = headers.indexOf('task_type');
-    if (idx >= 0) tags.push({ name: 'task_type', cols: [idx], multi: false });
-  } else {
-    const tagDefs = [
-      { name: '主体类型', multi: true },
-      { name: '人物运动', multi: true },
-      { name: '能力专项', multi: false },
-      { name: '非人运动', multi: false },
-      { name: 'prompt类型', multi: false },
-      { name: '镜头语言', multi: true }
-    ];
-    for (const td of tagDefs) {
-      const idx = headers.indexOf(td.name);
-      if (idx >= 0) {
-        const cols = [idx];
-        // Check adjacent null-header columns (multi-select sub-columns)
+  for (const td of tagDefs) {
+    const idx = headers.indexOf(td.name);
+    if (idx >= 0) {
+      const cols = [idx];
+      if (td.multi) {
         let next = idx + 1;
         while (next < headers.length && headers[next] == null && next < idx + 4) {
           cols.push(next);
           next++;
         }
-        tags.push({ name: td.name, cols, multi: td.multi });
       }
+      tags.push({ name: td.name, cols, multi: td.multi });
     }
   }
   return tags;
@@ -362,26 +542,36 @@ function parsePersonInfo(sheet, personCount, groupMode) {
   const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
   const names = [];
 
-  // Detect structure: look for name column
-  if (groupMode === 'paired' || (groupMode === 'auto' && data[0] && data[0].some(v => v && String(v).includes('组')))) {
-    // Paired: find two name columns
-    const nameCol1 = data[0].findIndex((v, i) => v === '姓名');
-    let nameCol2 = -1;
-    if (nameCol1 >= 0) {
-      nameCol2 = data[0].findIndex((v, i) => v === '姓名' && i > nameCol1);
+  // Detect paired structure: header has two "姓名" columns with equal person counts on each side
+  const headerRow = data[0] || [];
+  const nameCol1 = headerRow.indexOf('姓名');
+  let nameCol2 = -1;
+  if (nameCol1 >= 0) {
+    for (let i = nameCol1 + 1; i < headerRow.length; i++) {
+      if (headerRow[i] === '姓名') { nameCol2 = i; break; }
     }
-    if (nameCol1 >= 0 && nameCol2 >= 0) {
-      for (let i = 1; i < data.length && names.length < personCount; i++) {
-        const n1 = data[i][nameCol1];
-        const n2 = data[i][nameCol2];
-        if (n1 || n2) names.push(`${n1 || ''}/${n2 || ''}`);
-      }
+  }
+
+  const hasTwoNameCols = nameCol1 >= 0 && nameCol2 >= 0;
+  let leftCount = 0, rightCount = 0;
+  if (hasTwoNameCols) {
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][nameCol1] && String(data[i][nameCol1]).trim()) leftCount++;
+      if (data[i][nameCol2] && String(data[i][nameCol2]).trim()) rightCount++;
+    }
+  }
+  const isPaired = hasTwoNameCols && leftCount > 0 && leftCount === rightCount;
+
+  if (groupMode === 'paired' || (groupMode === 'auto' && isPaired)) {
+    for (let i = 1; i < data.length && names.length < personCount; i++) {
+      const n1 = data[i][nameCol1];
+      const n2 = data[i][nameCol2];
+      if (n1 || n2) names.push(`${n1 || ''}/${n2 || ''}`);
     }
   }
 
   if (names.length === 0) {
     // Single column: find 姓名 column
-    const headerRow = data[0] || [];
     let nameColIdx = headerRow.indexOf('姓名');
     if (nameColIdx < 0) nameColIdx = 1; // fallback to col B
     for (let i = 1; i < data.length && names.length < personCount; i++) {
@@ -466,24 +656,30 @@ function computeSummary(personData, dimCols, ratingFormat, promptCount, personNa
   return { total: { name: `${personData.length}人总值`, dims: totalDims }, persons: personResults };
 }
 
-function computeDimensionBreakdown(personData, dimCols, tagCols, ratingFormat, headers) {
+function computeDimensionBreakdown(personData, dimCols, tagCols, ratingFormat, headers, configTags) {
   const allRows = personData.flat();
   const breakdowns = [];
 
-  for (const tag of tagCols) {
-    // Get unique values
-    const valueSet = new Set();
-    for (const row of allRows) {
-      for (const colIdx of tag.cols) {
-        const v = row[colIdx];
-        if (v && String(v).trim()) valueSet.add(String(v).trim());
+  for (let ti = 0; ti < tagCols.length; ti++) {
+    const tag = tagCols[ti];
+    // Use configured values if available, otherwise scan from data
+    let values;
+    const cfgTag = configTags && configTags[ti];
+    if (cfgTag && cfgTag.values && cfgTag.values.length > 0) {
+      values = cfgTag.values;
+    } else {
+      const valueSet = new Set();
+      for (const row of allRows) {
+        for (const colIdx of tag.cols) {
+          const v = row[colIdx];
+          if (v && String(v).trim()) valueSet.add(String(v).trim());
+        }
       }
+      values = [...valueSet].sort();
     }
-    const values = [...valueSet].sort();
 
     const valueResults = [];
     for (const val of values) {
-      // Filter rows matching this tag value
       const matched = allRows.filter(row => {
         for (const colIdx of tag.cols) {
           if (row[colIdx] && String(row[colIdx]).trim() === val) return true;
@@ -517,9 +713,22 @@ function computeDimensionBreakdown(personData, dimCols, tagCols, ratingFormat, h
   return breakdowns;
 }
 
-function computeFactorSummary(personData, dimCols, ratingFormat) {
+function computeFactorSummary(personData, dimCols, ratingFormat, secondaryDims) {
   const factorCounts = {};
   const allRows = personData.flat();
+
+  // Initialize with configured secondary dims (so missing ones show as 0)
+  if (secondaryDims) {
+    for (const dim of dimCols) {
+      if (dim.factorCol === null) continue;
+      if (secondaryDims[dim.name]) {
+        factorCounts[dim.name] = {};
+        for (const sub of secondaryDims[dim.name]) {
+          factorCounts[dim.name][sub] = { good: 0, bad: 0 };
+        }
+      }
+    }
+  }
 
   for (const dim of dimCols) {
     if (dim.factorCol === null) continue;
@@ -527,7 +736,11 @@ function computeFactorSummary(personData, dimCols, ratingFormat) {
       const rating = row[dim.col];
       if (!rating) continue;
       const v = String(rating).trim();
-      if (v !== ratingFormat.bad && v !== ratingFormat.as_bad) continue;
+
+      let direction = null;
+      if (v === ratingFormat.good || v === ratingFormat.as_bad) direction = 'good';
+      else if (v === ratingFormat.bad || v === ratingFormat.as_good) direction = 'bad';
+      if (!direction) continue;
 
       const factorStr = row[dim.factorCol];
       if (!factorStr || factorStr === '[]') continue;
@@ -535,8 +748,10 @@ function computeFactorSummary(personData, dimCols, ratingFormat) {
       try {
         const factors = JSON.parse(factorStr);
         for (const f of factors) {
+          if (!f || !String(f).trim()) continue;
           if (!factorCounts[dim.name]) factorCounts[dim.name] = {};
-          factorCounts[dim.name][f] = (factorCounts[dim.name][f] || 0) + 1;
+          if (!factorCounts[dim.name][f]) factorCounts[dim.name][f] = { good: 0, bad: 0 };
+          factorCounts[dim.name][f][direction]++;
         }
       } catch (e) {}
     }
@@ -682,14 +897,19 @@ function renderFactorTab(container) {
   if (!results.factorSummary) { container.innerHTML = '<div class="empty-state"><p>当前场景无二级维度汇总</p></div>'; return; }
 
   let html = '<div class="table-wrapper"><table>';
-  html += '<tr><th>一级分类</th><th>二级分类（影响因素）</th><th>出现次数</th></tr>';
+  html += '<tr><th>一级分类</th><th>二级分类（影响因素）</th><th>Good方向次数</th><th>Bad方向次数</th><th>合计</th></tr>';
 
   for (const [dimName, factors] of Object.entries(results.factorSummary)) {
-    const sorted = Object.entries(factors).sort((a, b) => b[1] - a[1]);
+    const sorted = Object.entries(factors).sort((a, b) => (b[1].good + b[1].bad) - (a[1].good + a[1].bad));
     for (let i = 0; i < sorted.length; i++) {
+      const [name, counts] = sorted[i];
+      const total = counts.good + counts.bad;
       html += `<tr>
         ${i === 0 ? `<td class="label" rowspan="${sorted.length}">${dimName}</td>` : ''}
-        <td class="label">${sorted[i][0]}</td><td>${sorted[i][1]}</td>
+        <td class="label">${name}</td>
+        <td class="good">${counts.good}</td>
+        <td class="bad">${counts.bad}</td>
+        <td>${total}</td>
       </tr>`;
     }
   }
@@ -706,7 +926,9 @@ function renderPersonalTab(container) {
   html += '<tr><th>序号</th>';
   for (const dim of dimCols) html += `<th>综合-${dim.name.slice(0,4)}</th>`;
   for (const pn of personNames) {
-    for (const dim of dimCols) html += `<th>${pn.slice(0,3)}-${dim.name.slice(0,3)}</th>`;
+    // For paired names like "周海清/张一鸣", show as "周海清/张一鸣-维度"
+    const shortName = pn.includes('/') ? pn.split('/').map(n => n.slice(0,2)).join('/') : pn.slice(0,3);
+    for (const dim of dimCols) html += `<th>${shortName}-${dim.name.slice(0,4)}</th>`;
   }
   html += '</tr>';
 
@@ -776,11 +998,11 @@ function exportExcel() {
 
   // Sheet 3: 二级维度汇总 (if applicable)
   if (results.hasFactors && results.factorSummary) {
-    const factorData = [['一级分类', '二级分类', '出现次数']];
+    const factorData = [['一级分类', '二级分类', 'Good方向次数', 'Bad方向次数', '合计']];
     for (const [dimName, factors] of Object.entries(results.factorSummary)) {
-      const sorted = Object.entries(factors).sort((a, b) => b[1] - a[1]);
-      for (const [f, count] of sorted) {
-        factorData.push([dimName, f, count]);
+      const sorted = Object.entries(factors).sort((a, b) => (b[1].good + b[1].bad) - (a[1].good + a[1].bad));
+      for (const [f, counts] of sorted) {
+        factorData.push([dimName, f, counts.good, counts.bad, counts.good + counts.bad]);
       }
     }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(factorData), '二级维度汇总');
@@ -1213,7 +1435,7 @@ function loadFromHistory(id) {
     personalSummary: [],
     aiReport: entry.aiReport,
     qcReport: entry.qcReport,
-    ratingFormat: entry.scene === 'wm' ? RATING_VALUES.wm : RATING_VALUES.t2v,
+    ratingFormat: entry.scene === 'wm' ? PRESETS.wm.ratingFormat : PRESETS.t2v.ratingFormat,
   };
 
   document.getElementById('fileInfo').style.display = 'block';
@@ -1275,7 +1497,8 @@ document.getElementById('clearHistoryBtn').addEventListener('click', () => {
   }
 });
 
-// Init history on page load
+// Init on page load
+loadSavedConfig();
 renderHistory();
 </script>
 </body>
