@@ -566,12 +566,16 @@ function processData() {
     headers = rawSheet[0];
     dataRows = rawSheet.slice(1).filter(r => r[0] != null);
   } else {
-    // Try to find 乱序 format: any sheet with columns A/B + 模型A/模型B + 标注员名
-    const sheetName = wb.SheetNames.find(sn => {
+    // Try to find 乱序 format: check '原始数据' sheet first, then scan all sheets
+    const candidates = wb.Sheets['原始数据'] ? ['原始数据'] : [];
+    const sheetName = candidates.find(sn => {
+      const h = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: null })[0] || [];
+      return h.includes('模型A') && h.includes('标注员名');
+    }) || wb.SheetNames.find(sn => {
       const h = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: null })[0] || [];
       return h.includes('A') && h.includes('B') && h.includes('模型A') && h.includes('模型B') && h.includes('标注员名');
     });
-    if (!sheetName) throw new Error('未找到"原始数据汇总"sheet，也未检测到乱序格式（需要有 A/B/模型A/模型B/标注员名 列）');
+    if (!sheetName) throw new Error('未找到"原始数据汇总"或"原始数据"sheet，也未检测到乱序格式（需要有 A/B/模型A/模型B/标注员名 列）');
 
     const result = preprocessShuffledData(wb.Sheets[sheetName]);
     headers = result.headers;
