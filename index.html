@@ -59,6 +59,28 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
 .empty-state p { font-size: 14px; }
 
 .table-wrapper { max-height: 600px; overflow: auto; }
+
+.config-group input[type="password"] { min-width: 280px; }
+.btn-ai { background: #7c3aed; }
+.btn-ai:hover { background: #6d28d9; }
+.btn-ai:disabled { background: #ccc; }
+
+.ai-report { padding: 20px; line-height: 1.8; font-size: 14px; }
+.ai-report h1 { font-size: 20px; margin: 20px 0 12px; }
+.ai-report h2 { font-size: 17px; margin: 18px 0 10px; }
+.ai-report h3 { font-size: 15px; margin: 14px 0 8px; }
+.ai-report p { margin: 8px 0; }
+.ai-report ul { margin: 8px 0 8px 20px; }
+.ai-report li { margin: 4px 0; }
+.ai-report table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
+.ai-report table th, .ai-report table td { border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; }
+.ai-report table th { background: #f5f5f5; font-weight: 600; }
+.ai-report blockquote { border-left: 3px solid #7c3aed; padding-left: 12px; margin: 12px 0; color: #555; }
+.ai-report code { background: #f0f0f0; padding: 2px 5px; border-radius: 3px; font-size: 12px; }
+.ai-report strong { color: #1a1a2e; }
+.ai-loading { text-align: center; padding: 40px; color: #7c3aed; }
+.ai-loading .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid #e0e0e0; border-top-color: #7c3aed; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 10px; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -87,6 +109,24 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
         </select>
       </div>
     </div>
+    <div class="config-row" style="margin-top: 16px;">
+      <div class="config-group">
+        <label>AI 分析 API Key（可选）</label>
+        <input type="password" id="apiKey" placeholder="pk-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+      </div>
+      <div class="config-group">
+        <label>API Base URL</label>
+        <input type="text" id="apiBaseUrl" value="https://modelservice.jdcloud.com/anthropic" style="min-width:320px;">
+      </div>
+      <div class="config-group">
+        <label>模型</label>
+        <select id="aiModel">
+          <option value="Claude-Opus-4.8-hq">Claude-Opus-4.8-hq</option>
+          <option value="claude-sonnet-5-hq">Claude-Sonnet-5-hq</option>
+          <option value="Claude-Opus-4.8-C">Claude-Opus-4.8-C</option>
+        </select>
+      </div>
+    </div>
   </div>
 
   <div class="upload-area" id="uploadArea">
@@ -101,6 +141,7 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
 
   <div class="actions">
     <button class="btn" id="processBtn" disabled>开始计算</button>
+    <button class="btn btn-ai" id="aiBtn" disabled>AI 生成分析报告</button>
     <button class="btn btn-export" id="exportBtn" disabled>导出 Excel</button>
   </div>
 
@@ -516,9 +557,7 @@ function renderResults() {
   const tabsEl = document.getElementById('tabs');
   tabsEl.style.display = 'flex';
 
-  const tabNames = ['汇总结果', '维度汇总'];
-  if (results.hasFactors) tabNames.push('二级维度汇总');
-  tabNames.push('个人数据汇总');
+  const tabNames = getTabNames();
 
   tabsEl.innerHTML = tabNames.map((name, i) =>
     `<div class="tab ${i === 0 ? 'active' : ''}" data-tab="${i}">${name}</div>`
@@ -533,6 +572,7 @@ function renderResults() {
   });
 
   renderTab(0, tabNames);
+  document.getElementById('aiBtn').disabled = false;
 }
 
 function renderTab(idx, tabNames) {
@@ -543,6 +583,10 @@ function renderTab(idx, tabNames) {
   else if (name === '维度汇总') renderDimensionTab(content);
   else if (name === '二级维度汇总') renderFactorTab(content);
   else if (name === '个人数据汇总') renderPersonalTab(content);
+  else if (name === 'AI 分析报告') {
+    if (results.aiReport) renderAIReport(content, results.aiReport);
+    else content.innerHTML = '<div class="empty-state"><p>点击"AI 生成分析报告"按钮开始</p></div>';
+  }
 }
 
 function renderSummaryTab(container) {
@@ -727,6 +771,198 @@ function exportExcel() {
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(personalData), '个人数据汇总');
 
   XLSX.writeFile(wb, `评测汇总结果_${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+
+// AI Analysis
+document.getElementById('aiBtn').addEventListener('click', runAIAnalysis);
+
+function buildAnalysisPrompt() {
+  const { summary, dimensionBreakdown, hasFactors, factorSummary, scene, promptCount, personCount } = results;
+
+  let dataText = `## 评测概况\n- 场景: ${scene.toUpperCase()}\n- 评测人数: ${personCount}\n- Prompt 总数: ${promptCount}\n\n`;
+
+  // 汇总结果
+  dataText += `## 汇总结果（${summary.total.name}）\n\n`;
+  dataText += `| 维度 | B(Bad)占比 | As good占比 | As bad占比 | G(Good)占比 | Similar合计 | GSB |\n|---|---|---|---|---|---|---|\n`;
+  for (const dim of summary.total.dims) {
+    const sim = dim.ratios.as_good + dim.ratios.as_bad;
+    dataText += `| ${dim.name} | ${(dim.ratios.bad*100).toFixed(2)}% | ${(dim.ratios.as_good*100).toFixed(2)}% | ${(dim.ratios.as_bad*100).toFixed(2)}% | ${(dim.ratios.good*100).toFixed(2)}% | ${(sim*100).toFixed(2)}% | ${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)} |\n`;
+  }
+
+  // 维度汇总
+  dataText += `\n## 维度汇总（按标签分类）\n\n`;
+  for (const bd of dimensionBreakdown) {
+    dataText += `### ${bd.tagName}\n\n| 标签值 | 样本数 | 维度 | B占比 | G占比 | Similar | GSB |\n|---|---|---|---|---|---|---|\n`;
+    for (const val of bd.values) {
+      for (let di = 0; di < val.dims.length; di++) {
+        const dim = val.dims[di];
+        const sim = dim.ratios.as_good + dim.ratios.as_bad;
+        dataText += `| ${di === 0 ? val.value : ''} | ${di === 0 ? val.matchedCount : ''} | ${dim.name} | ${(dim.ratios.bad*100).toFixed(2)}% | ${(dim.ratios.good*100).toFixed(2)}% | ${(sim*100).toFixed(2)}% | ${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)} |\n`;
+      }
+    }
+    dataText += '\n';
+  }
+
+  // 二级维度汇总
+  if (hasFactors && factorSummary && Object.keys(factorSummary).length > 0) {
+    dataText += `## 二级影响因素统计\n\n| 一级维度 | 影响因素 | 出现次数 |\n|---|---|---|\n`;
+    for (const [dimName, factors] of Object.entries(factorSummary)) {
+      const sorted = Object.entries(factors).sort((a, b) => b[1] - a[1]);
+      for (const [f, count] of sorted) {
+        dataText += `| ${dimName} | ${f} | ${count} |\n`;
+      }
+    }
+  }
+
+  return dataText;
+}
+
+async function runAIAnalysis() {
+  const apiKey = document.getElementById('apiKey').value.trim();
+  const baseUrl = document.getElementById('apiBaseUrl').value.trim();
+  const model = document.getElementById('aiModel').value;
+
+  if (!apiKey) {
+    showStatus('error', '请填写 API Key 后再生成分析报告');
+    return;
+  }
+  if (!results) {
+    showStatus('error', '请先上传数据并点击"开始计算"');
+    return;
+  }
+
+  const aiBtn = document.getElementById('aiBtn');
+  aiBtn.disabled = true;
+  aiBtn.textContent = '分析中...';
+
+  // Switch to AI tab
+  const tabsEl = document.getElementById('tabs');
+  const tabNames = getTabNames();
+  if (!tabNames.includes('AI 分析报告')) {
+    tabNames.push('AI 分析报告');
+    tabsEl.innerHTML = tabNames.map((name, i) =>
+      `<div class="tab ${i === tabNames.length - 1 ? 'active' : ''}" data-tab="${i}">${name}</div>`
+    ).join('');
+    tabsEl.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabsEl.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        renderTab(parseInt(tab.dataset.tab), tabNames);
+      });
+    });
+  } else {
+    tabsEl.querySelectorAll('.tab').forEach(t => {
+      t.classList.remove('active');
+      if (t.textContent === 'AI 分析报告') t.classList.add('active');
+    });
+  }
+
+  const content = document.getElementById('sheetContent');
+  content.innerHTML = '<div class="ai-loading"><span class="spinner"></span>正在调用 AI 生成分析报告，请稍候...</div>';
+
+  const dataText = buildAnalysisPrompt();
+
+  const systemPrompt = `你是一位专业的视频生成模型评测分析师。根据用户提供的 GSB 人工盲评数据，产出结构化分析报告。
+
+GSB 评分体系：
+- G (Good) / G（Good）：模型A（我方）明确更好
+- As bad / AS bad：两方接近，但我方略好（注意：名称反直觉）
+- As good / AS good：两方接近，但竞品略好（注意：名称反直觉）
+- B (Bad) / B（Bad）：竞品明确更好
+
+GSB = (我方胜率 + 0.5 × Similar率) / (竞品胜率 + 0.5 × Similar率)
+GSB > 1 我方优，< 1 竞品优
+
+报告要求：
+1. 综合表现总述：2-3 句概括 + 数据表（按 GSB 降序）+ 3-4 条关键观察
+2. 按标签分类汇总表现：数据表 + 3-5 条观察
+3. 二级影响因素分析（如有数据）：综合评价影响因素 + 各维度内部短板
+
+写作原则：
+- 中文行文，简洁直接
+- 每条观察以加粗关键词开头，是独立洞察不是数据复述
+- 不给优化建议，不写总结段落
+- 百分比两位小数，GSB 两到三位小数`;
+
+  try {
+    const response = await fetch(`${baseUrl}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: model,
+        max_tokens: 4096,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: `以下是评测数据，请产出 GSB 人工盲评分析报告：\n\n${dataText}` }]
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`API 请求失败 (${response.status}): ${errText}`);
+    }
+
+    const data = await response.json();
+    const reportText = data.content[0].text;
+
+    results.aiReport = reportText;
+    renderAIReport(content, reportText);
+    showStatus('success', 'AI 分析报告生成完成');
+  } catch (err) {
+    content.innerHTML = `<div class="empty-state"><p style="color:#c62828;">AI 分析失败: ${err.message}</p></div>`;
+    showStatus('error', 'AI 分析失败: ' + err.message);
+  } finally {
+    aiBtn.disabled = false;
+    aiBtn.textContent = 'AI 生成分析报告';
+  }
+}
+
+function renderAIReport(container, markdown) {
+  // Simple markdown to HTML
+  let html = markdown
+    .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+    .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+    .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+    .replace(/^\> (.*$)/gm, '<blockquote>$1</blockquote>')
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`(.*?)`/g, '<code>$1</code>')
+    .replace(/^\- (.*$)/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+
+  // Table parsing
+  html = html.replace(/(\|.*\|[\r\n]+\|[-| :]+\|[\r\n]+((\|.*\|[\r\n]*)+))/g, (match) => {
+    const lines = match.trim().split('\n').filter(l => l.trim());
+    if (lines.length < 3) return match;
+    const headers = lines[0].split('|').filter(c => c.trim()).map(c => c.trim());
+    const rows = lines.slice(2).map(line => line.split('|').filter(c => c.trim()).map(c => c.trim()));
+    let table = '<table><tr>' + headers.map(h => `<th>${h}</th>`).join('') + '</tr>';
+    for (const row of rows) {
+      table += '<tr>' + row.map(c => `<td>${c}</td>`).join('') + '</tr>';
+    }
+    table += '</table>';
+    return table;
+  });
+
+  // Fix multiple consecutive <li> into <ul>
+  html = html.replace(/(<li>.*?<\/li>\n?)+/gs, (match) => `<ul>${match}</ul>`);
+
+  // Paragraphs for remaining lines
+  html = html.split('\n').map(line => {
+    if (line.trim() && !line.startsWith('<')) return `<p>${line}</p>`;
+    return line;
+  }).join('\n');
+
+  container.innerHTML = `<div class="ai-report">${html}</div>`;
+}
+
+function getTabNames() {
+  const names = ['汇总结果', '维度汇总'];
+  if (results.hasFactors) names.push('二级维度汇总');
+  names.push('个人数据汇总');
+  return names;
 }
 </script>
 </body>
