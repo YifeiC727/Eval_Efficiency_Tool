@@ -81,6 +81,23 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
 .ai-loading { text-align: center; padding: 40px; color: #7c3aed; }
 .ai-loading .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid #e0e0e0; border-top-color: #7c3aed; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 10px; vertical-align: middle; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.history-panel { background: #fff; border-radius: 12px; padding: 24px; margin-top: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.history-panel h2 { font-size: 16px; margin-bottom: 16px; color: #333; display: flex; align-items: center; gap: 12px; }
+.btn-clear-history { padding: 4px 10px; font-size: 12px; background: #ef5350; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+.btn-clear-history:hover { background: #d32f2f; }
+.history-list { display: flex; flex-direction: column; gap: 8px; }
+.history-item { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: #f8fafc; border-radius: 8px; border: 1px solid #e8ecf0; transition: all 0.15s; }
+.history-item:hover { border-color: #4f8cf7; background: #f0f7ff; }
+.history-item-info { display: flex; flex-direction: column; gap: 2px; }
+.history-item-title { font-size: 14px; font-weight: 500; color: #1a1a2e; }
+.history-item-meta { font-size: 12px; color: #888; }
+.history-item-actions { display: flex; gap: 8px; }
+.history-item-actions button { padding: 5px 10px; font-size: 12px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; background: #fff; }
+.history-item-actions button:hover { background: #f0f0f0; }
+.history-item-actions button.load { border-color: #4f8cf7; color: #4f8cf7; }
+.history-item-actions button.delete { border-color: #ef5350; color: #ef5350; }
+.history-empty { text-align: center; padding: 20px; color: #999; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -144,11 +161,17 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
     <button class="btn btn-ai" id="aiBtn" disabled>AI 生成分析报告</button>
     <button class="btn btn-ai" id="qcBtn" disabled style="background:#e65100;">AI 评测人员质检</button>
     <button class="btn btn-export" id="exportBtn" disabled>导出 Excel</button>
+    <button class="btn" id="saveBtn" disabled style="background:#5c6bc0;">保存记录</button>
   </div>
 
   <div class="tabs" id="tabs" style="display:none"></div>
   <div class="sheet-content" id="sheetContent">
     <div class="empty-state"><p>请上传原始数据汇总文件</p></div>
+  </div>
+
+  <div class="history-panel" id="historyPanel">
+    <h2>历史记录 <button class="btn-clear-history" id="clearHistoryBtn">清空</button></h2>
+    <div class="history-list" id="historyList"></div>
   </div>
 </div>
 
@@ -203,11 +226,14 @@ document.getElementById('processBtn').addEventListener('click', () => {
     processData();
     showStatus('success', '计算完成！');
     document.getElementById('exportBtn').disabled = false;
+    document.getElementById('saveBtn').disabled = false;
   } catch (err) {
     showStatus('error', '计算出错: ' + err.message);
     console.error(err);
   }
 });
+
+document.getElementById('saveBtn').addEventListener('click', saveCurrentToHistory);
 
 function processData() {
   const wb = workbookData;
@@ -1123,6 +1149,134 @@ GSB体系：
     qcBtn.textContent = 'AI 评测人员质检';
   }
 }
+
+// ==================== History (localStorage) ====================
+const STORAGE_KEY = 'eval_tool_history';
+
+function getHistory() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
+  catch { return []; }
+}
+
+function saveHistory(list) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+}
+
+function saveCurrentToHistory() {
+  if (!results) return;
+  const entry = {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    timestamp: new Date().toISOString(),
+    fileName: document.getElementById('fileInfo').textContent.replace('已加载: ', '').split(' (')[0] || '未命名',
+    scene: results.scene,
+    promptCount: results.promptCount,
+    personCount: results.personCount,
+    personNames: results.personNames,
+    summary: results.summary,
+    dimensionBreakdown: results.dimensionBreakdown,
+    hasFactors: results.hasFactors,
+    factorSummary: results.factorSummary || null,
+    aiReport: results.aiReport || null,
+    qcReport: results.qcReport || null,
+  };
+  const history = getHistory();
+  history.unshift(entry);
+  if (history.length > 20) history.pop();
+  try {
+    saveHistory(history);
+    showStatus('success', '已保存到历史记录');
+  } catch (e) {
+    if (e.name === 'QuotaExceededError') {
+      history.pop();
+      saveHistory(history);
+      showStatus('info', '存储空间有限，已保存（旧记录被移除）');
+    }
+  }
+  renderHistory();
+}
+
+function loadFromHistory(id) {
+  const history = getHistory();
+  const entry = history.find(h => h.id === id);
+  if (!entry) return;
+
+  results = {
+    scene: entry.scene,
+    promptCount: entry.promptCount,
+    personCount: entry.personCount,
+    personNames: entry.personNames,
+    dimCols: entry.summary.total.dims.map(d => ({ name: d.name })),
+    summary: entry.summary,
+    dimensionBreakdown: entry.dimensionBreakdown,
+    hasFactors: entry.hasFactors,
+    factorSummary: entry.factorSummary,
+    personalSummary: [],
+    aiReport: entry.aiReport,
+    qcReport: entry.qcReport,
+    ratingFormat: entry.scene === 'wm' ? RATING_VALUES.wm : RATING_VALUES.t2v,
+  };
+
+  document.getElementById('fileInfo').style.display = 'block';
+  document.getElementById('fileInfo').textContent = `已加载历史记录: ${entry.fileName} (${new Date(entry.timestamp).toLocaleString()})`;
+  document.getElementById('tabs').style.display = 'flex';
+  document.getElementById('exportBtn').disabled = false;
+  document.getElementById('aiBtn').disabled = false;
+  document.getElementById('qcBtn').disabled = false;
+
+  const tabNames = getTabNames();
+  const tabsEl = document.getElementById('tabs');
+  tabsEl.innerHTML = tabNames.map((name, i) =>
+    `<div class="tab ${i === 0 ? 'active' : ''}" data-tab="${i}">${name}</div>`
+  ).join('');
+  tabsEl.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabsEl.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      renderTab(parseInt(tab.dataset.tab), tabNames);
+    });
+  });
+  renderTab(0, tabNames);
+  showStatus('success', '已加载历史记录');
+}
+
+function deleteFromHistory(id) {
+  const history = getHistory().filter(h => h.id !== id);
+  saveHistory(history);
+  renderHistory();
+}
+
+function renderHistory() {
+  const list = document.getElementById('historyList');
+  const history = getHistory();
+
+  if (history.length === 0) {
+    list.innerHTML = '<div class="history-empty">暂无历史记录。计算完成后点击"保存记录"即可保存。</div>';
+    return;
+  }
+
+  list.innerHTML = history.map(entry => `
+    <div class="history-item">
+      <div class="history-item-info">
+        <div class="history-item-title">${entry.fileName}</div>
+        <div class="history-item-meta">${new Date(entry.timestamp).toLocaleString()} | ${entry.scene.toUpperCase()} | ${entry.personCount}人 × ${entry.promptCount}题${entry.aiReport ? ' | 含AI报告' : ''}${entry.qcReport ? ' | 含质检' : ''}</div>
+      </div>
+      <div class="history-item-actions">
+        <button class="load" onclick="loadFromHistory('${entry.id}')">加载</button>
+        <button class="delete" onclick="deleteFromHistory('${entry.id}')">删除</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+document.getElementById('clearHistoryBtn').addEventListener('click', () => {
+  if (confirm('确认清空所有历史记录？')) {
+    localStorage.removeItem(STORAGE_KEY);
+    renderHistory();
+  }
+});
+
+// Init history on page load
+renderHistory();
 </script>
 </body>
 </html>
