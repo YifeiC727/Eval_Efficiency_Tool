@@ -626,15 +626,44 @@ function processData() {
 
   if (dimCols.length === 0) throw new Error('未找到匹配的维度列，请检查配置中的维度名称是否与 Excel 表头一致');
 
-  // Detect prompt count and person count
+  // Detect prompt count and split data by person (supports partial segments)
   const seqCol = 0;
   let promptCount = 0;
+  // Find first reset to determine prompt count
   for (let i = 0; i < dataRows.length; i++) {
     const seq = parseInt(dataRows[i][seqCol]);
     if (i > 0 && seq === 1) { promptCount = i; break; }
   }
   if (promptCount === 0) promptCount = dataRows.length;
-  const personCount = Math.round(dataRows.length / promptCount);
+
+  // Split into segments by detecting seq resets
+  const personData = [];
+  let segStart = 0;
+  for (let i = 1; i < dataRows.length; i++) {
+    const seq = parseInt(dataRows[i][seqCol]);
+    if (seq === 1 && parseInt(dataRows[i-1][seqCol]) > 1) {
+      personData.push(dataRows.slice(segStart, i));
+      segStart = i;
+    }
+  }
+  personData.push(dataRows.slice(segStart)); // last segment
+
+  const personCount = personData.length;
+
+  // Detect partial persons and pad with nulls to align prompt indices
+  for (let p = 0; p < personData.length; p++) {
+    const seg = personData[p];
+    if (seg.length < promptCount) {
+      // Partial person: determine which prompts they covered
+      const startSeq = parseInt(seg[0][seqCol]);
+      const paddedSeg = new Array(promptCount).fill(null);
+      for (const row of seg) {
+        const idx = parseInt(row[seqCol]) - 1;
+        if (idx >= 0 && idx < promptCount) paddedSeg[idx] = row;
+      }
+      personData[p] = paddedSeg;
+    }
+  }
 
   // Parse person info
   let personNames = [];
@@ -643,12 +672,6 @@ function processData() {
     personNames = parsePersonInfo(wb.Sheets['测评人信息'], personCount, groupMode);
   } else {
     for (let i = 0; i < personCount; i++) personNames.push(`评测人${i+1}`);
-  }
-
-  // Split data by person
-  const personData = [];
-  for (let p = 0; p < personCount; p++) {
-    personData.push(dataRows.slice(p * promptCount, (p + 1) * promptCount));
   }
 
   // Check if has factors
@@ -992,6 +1015,38 @@ function computePersonalSummary(personData, dimCols, ratingFormat, personNames, 
   }
   return rows;
 }
+
+// Person filter
+function renderPersonFilter(personNames) {
+  const panel = document.getElementById('personFilter');
+  panel.style.display = 'block';
+  const list = document.getElementById('personFilterList');
+  list.innerHTML = personNames.map((name, i) =>
+    `<label id="pf-${i}"><input type="checkbox" checked data-person-idx="${i}"> ${name}</label>`
+  ).join('');
+  list.querySelectorAll('input').forEach(cb => {
+    cb.addEventListener('change', () => {
+      cb.parentElement.classList.toggle('excluded', !cb.checked);
+    });
+  });
+}
+
+document.getElementById('recalcBtn').addEventListener('click', () => {
+  if (!cachedProcessData) return;
+  const checkboxes = document.querySelectorAll('#personFilterList input[type="checkbox"]');
+  const includedIndices = [];
+  checkboxes.forEach(cb => { if (cb.checked) includedIndices.push(parseInt(cb.dataset.personIdx)); });
+
+  if (includedIndices.length === 0) { showStatus('error', '至少保留一位评测人'); return; }
+
+  const { personData, personNames, dimCols, tagCols, ratingFormat, hasFactors, headers, config, promptCount } = cachedProcessData;
+  const filteredData = includedIndices.map(i => personData[i]);
+  const filteredNames = includedIndices.map(i => personNames[i]);
+
+  generateResults(filteredData, filteredNames, dimCols, tagCols, ratingFormat, hasFactors, headers, config, promptCount, filteredData.length);
+  const excluded = cachedProcessData.personCount - includedIndices.length;
+  showStatus('success', `已屏蔽 ${excluded} 人，基于 ${includedIndices.length} 人重新计算完成`);
+});
 
 // Rendering
 function renderResults() {
