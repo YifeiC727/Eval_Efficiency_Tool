@@ -1249,12 +1249,14 @@ function renderWorstCasesTab(container) {
     if (meta.modelAUrl || meta.modelBUrl) {
       html += `<div class="worst-case-videos">`;
       if (meta.modelAUrl) {
-        html += `<div class="video-col"><label>模型A</label><video controls preload="metadata" src="${meta.modelAUrl}"></video></div>`;
+        html += `<div class="video-col"><label>模型A (Ours)</label><video controls preload="metadata" crossorigin="anonymous" src="${meta.modelAUrl}" onerror="this.outerHTML='<a href=\\'${meta.modelAUrl}\\'' target=\\'_blank\\'' style=\\'font-size:12px;color:#4f8cf7\\'>视频加载失败，点击打开</a>'"></video></div>`;
       }
       if (meta.modelBUrl) {
-        html += `<div class="video-col"><label>模型B</label><video controls preload="metadata" src="${meta.modelBUrl}"></video></div>`;
+        html += `<div class="video-col"><label>模型B (竞品)</label><video controls preload="metadata" crossorigin="anonymous" src="${meta.modelBUrl}" onerror="this.outerHTML='<a href=\\'${meta.modelBUrl}\\'' target=\\'_blank\\'' style=\\'font-size:12px;color:#4f8cf7\\'>视频加载失败，点击打开</a>'"></video></div>`;
       }
       html += `</div>`;
+    } else {
+      html += `<div style="font-size:12px;color:#999;margin-bottom:8px;">未找到视频URL（请确认数据中有"模型A"和"模型B"列）</div>`;
     }
 
     // Show per-dimension scores
