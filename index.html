@@ -216,7 +216,7 @@ function processData() {
   }
 
   // Check if has factors
-  const hasFactors = detectedScene !== 'wm' && dimCols.some(d => d.factorCol !== null);
+  const hasFactors = dimCols.some(d => d.factorCol !== null);
 
   // Generate results
   results = {
@@ -250,7 +250,7 @@ function findDimensionColumns(headers, scene) {
     const idx = headers.indexOf(dim);
     if (idx >= 0) {
       let factorCol = null;
-      if (scene !== 'wm' && idx + 1 < headers.length && headers[idx + 1] == null) {
+      if (idx + 1 < headers.length && headers[idx + 1] == null) {
         factorCol = idx + 1;
       }
       dims.push({ name: dim, col: idx, factorCol });
