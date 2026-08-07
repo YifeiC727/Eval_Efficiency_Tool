@@ -469,13 +469,115 @@ document.getElementById('processBtn').addEventListener('click', () => {
 
 document.getElementById('saveBtn').addEventListener('click', saveCurrentToHistory);
 
+// Preprocess shuffled (乱序) data into standard raw format
+function preprocessShuffledData(sheet) {
+  const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+  const headers = raw[0];
+  const rows = raw.slice(1).filter(r => r[0] != null);
+
+  const colA = headers.indexOf('A');
+  const colB = headers.indexOf('B');
+  const colModelA = headers.indexOf('模型A');
+  const colModelB = headers.indexOf('模型B');
+  const colPerson = headers.indexOf('标注员名');
+
+  if (colA < 0 || colModelA < 0 || colPerson < 0) {
+    throw new Error('乱序格式缺少必要列（A/B/模型A/模型B/标注员名）');
+  }
+
+  // Get rating format from config
+  const config = getActiveConfig();
+  const rf = config.ratingFormat;
+
+  // Find dimension columns (rating cols that need flipping)
+  const dimColIndices = [];
+  for (const dimName of config.dimensions) {
+    const idx = headers.indexOf(dimName);
+    if (idx >= 0) dimColIndices.push(idx);
+  }
+
+  // Flip function
+  function flipRating(val) {
+    if (!val) return val;
+    const v = String(val).trim();
+    if (v === rf.good) return rf.bad;
+    if (v === rf.bad) return rf.good;
+    if (v === rf.as_good) return rf.as_bad;
+    if (v === rf.as_bad) return rf.as_good;
+    return val;
+  }
+
+  // Process each row: check if display order is flipped vs true model order
+  let flippedCount = 0;
+  for (const row of rows) {
+    const displayA = row[colA];
+    const trueA = row[colModelA];
+    const isFlipped = displayA !== trueA;
+
+    if (isFlipped) {
+      flippedCount++;
+      // Flip all rating columns
+      for (const dimIdx of dimColIndices) {
+        row[dimIdx] = flipRating(row[dimIdx]);
+      }
+    }
+  }
+
+  // Sort by person then by sequence number
+  const seqCol = headers.indexOf('序号');
+  rows.sort((a, b) => {
+    const personCmp = String(a[colPerson] || '').localeCompare(String(b[colPerson] || ''));
+    if (personCmp !== 0) return personCmp;
+    return parseInt(a[seqCol] || 0) - parseInt(b[seqCol] || 0);
+  });
+
+  // Build output headers: remove A/B/标注员名 columns, keep 序号 + tags + 模型A + 模型B + dims
+  // Map to standard format: 序号, [tags...], 模型A, 模型B, [dim+factor pairs...]
+  const skipCols = new Set([colA, colB, colPerson]);
+  const outHeaders = [];
+  const colMap = []; // maps output col index -> input col index
+  for (let c = 0; c < headers.length; c++) {
+    if (skipCols.has(c)) continue;
+    outHeaders.push(headers[c]);
+    colMap.push(c);
+  }
+
+  const outRows = rows.map(row => colMap.map(c => row[c]));
+
+  // Get unique persons
+  const persons = [...new Set(rows.map(r => r[colPerson]))].sort();
+
+  return {
+    headers: outHeaders,
+    dataRows: outRows,
+    flippedCount,
+    personCount: persons.length
+  };
+}
+
 function processData() {
   const wb = workbookData;
-  if (!wb.Sheets['原始数据汇总']) throw new Error('缺少"原始数据汇总" sheet');
 
-  const rawSheet = XLSX.utils.sheet_to_json(wb.Sheets['原始数据汇总'], { header: 1, defval: null });
-  const headers = rawSheet[0];
-  const dataRows = rawSheet.slice(1).filter(r => r[0] != null);
+  // Detect file format: 乱序 vs 原始数据汇总
+  let rawSheet, headers, dataRows;
+
+  if (wb.Sheets['原始数据汇总']) {
+    rawSheet = XLSX.utils.sheet_to_json(wb.Sheets['原始数据汇总'], { header: 1, defval: null });
+    headers = rawSheet[0];
+    dataRows = rawSheet.slice(1).filter(r => r[0] != null);
+  } else {
+    // Try to find 乱序 format: any sheet with columns A/B + 模型A/模型B + 标注员名
+    const sheetName = wb.SheetNames.find(sn => {
+      const h = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: null })[0] || [];
+      return h.includes('A') && h.includes('B') && h.includes('模型A') && h.includes('模型B') && h.includes('标注员名');
+    });
+    if (!sheetName) throw new Error('未找到"原始数据汇总"sheet，也未检测到乱序格式（需要有 A/B/模型A/模型B/标注员名 列）');
+
+    const result = preprocessShuffledData(wb.Sheets[sheetName]);
+    headers = result.headers;
+    dataRows = result.dataRows;
+    showStatus('info', `检测到乱序格式，已自动翻转恢复 ${result.flippedCount} 行，按 ${result.personCount} 人排序`);
+  }
 
   // Detect scene and determine config
   const sceneSelect = document.getElementById('sceneSelect').value;
@@ -1323,27 +1425,52 @@ function buildAnalysisPrompt() {
     dataText += `| ${dim.name} | ${(dim.ratios.bad*100).toFixed(2)}% | ${(dim.ratios.as_good*100).toFixed(2)}% | ${(dim.ratios.as_bad*100).toFixed(2)}% | ${(dim.ratios.good*100).toFixed(2)}% | ${(sim*100).toFixed(2)}% | ${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)} |\n`;
   }
 
-  // 维度汇总
-  dataText += `\n## 维度汇总（按标签分类）\n\n`;
+  // 维度汇总 - 只给综合评价的GSB，并标注哪些标签差异显著
+  dataText += `\n## 维度汇总（按标签分类，综合评价维度）\n\n`;
+  const lastDimIdx = dimCols.length - 1; // 综合评价是最后一个维度
   for (const bd of dimensionBreakdown) {
-    dataText += `### ${bd.tagName}\n\n| 标签值 | 样本数 | 维度 | B占比 | G占比 | Similar | GSB |\n|---|---|---|---|---|---|---|\n`;
-    for (const val of bd.values) {
-      for (let di = 0; di < val.dims.length; di++) {
-        const dim = val.dims[di];
-        const sim = dim.ratios.as_good + dim.ratios.as_bad;
-        dataText += `| ${di === 0 ? val.value : ''} | ${di === 0 ? val.matchedCount : ''} | ${dim.name} | ${(dim.ratios.bad*100).toFixed(2)}% | ${(dim.ratios.good*100).toFixed(2)}% | ${(sim*100).toFixed(2)}% | ${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)} |\n`;
+    // 计算该标签下综合评价GSB的极差，判断是否有信息量
+    const gsbValues = bd.values.filter(v => v.matchedCount > 0).map(v => v.dims[lastDimIdx].gsb).filter(g => g !== Infinity);
+    const gsbMin = gsbValues.length ? Math.min(...gsbValues) : 1;
+    const gsbMax = gsbValues.length ? Math.max(...gsbValues) : 1;
+    const hasSignificantDiff = gsbMin < 0.7 || gsbMax > 1.4 || (gsbMax - gsbMin) > 0.5;
+
+    dataText += `### ${bd.tagName}${hasSignificantDiff ? '（⚠️ 差异显著，建议展开分析）' : '（差异较小）'}\n\n`;
+    dataText += `| 标签值 | 样本数 | 综合评价GSB | 最强维度 | 最弱维度 |\n|---|---|---|---|---|\n`;
+
+    // 按综合评价GSB升序
+    const sorted = [...bd.values].filter(v => v.matchedCount > 0).sort((a, b) => {
+      const ga = a.dims[lastDimIdx].gsb === Infinity ? 999 : a.dims[lastDimIdx].gsb;
+      const gb = b.dims[lastDimIdx].gsb === Infinity ? 999 : b.dims[lastDimIdx].gsb;
+      return ga - gb;
+    });
+
+    for (const val of sorted) {
+      const compGsb = val.dims[lastDimIdx].gsb;
+      // 找最强和最弱维度（排除综合评价本身）
+      let bestDim = '', worstDim = '';
+      let bestGsb = -Infinity, worstGsb = Infinity;
+      for (let di = 0; di < val.dims.length - 1; di++) {
+        const g = val.dims[di].gsb === Infinity ? 999 : val.dims[di].gsb;
+        if (g > bestGsb) { bestGsb = g; bestDim = `${val.dims[di].name}(${val.dims[di].gsb === Infinity ? '∞' : val.dims[di].gsb.toFixed(2)})`; }
+        if (g < worstGsb) { worstGsb = g; worstDim = `${val.dims[di].name}(${val.dims[di].gsb === Infinity ? '∞' : val.dims[di].gsb.toFixed(2)})`; }
       }
+      dataText += `| ${val.value} | ${val.matchedCount} | ${compGsb === Infinity ? '∞' : compGsb.toFixed(2)} | ${bestDim} | ${worstDim} |\n`;
     }
     dataText += '\n';
   }
 
-  // 二级维度汇总
+  // 二级维度汇总 - 只列Bad方向占比高的因素
   if (hasFactors && factorSummary && Object.keys(factorSummary).length > 0) {
-    dataText += `## 二级影响因素统计\n\n| 一级维度 | 影响因素 | 出现次数 |\n|---|---|---|\n`;
+    dataText += `## 二级影响因素统计\n\n`;
+    dataText += `| 一级维度 | 影响因素 | Good方向 | Bad方向 | 合计 | Bad占比 |\n|---|---|---|---|---|---|\n`;
     for (const [dimName, factors] of Object.entries(factorSummary)) {
-      const sorted = Object.entries(factors).sort((a, b) => b[1] - a[1]);
-      for (const [f, count] of sorted) {
-        dataText += `| ${dimName} | ${f} | ${count} |\n`;
+      const sorted = Object.entries(factors).sort((a, b) => (b[1].good + b[1].bad) - (a[1].good + a[1].bad));
+      for (const [f, counts] of sorted) {
+        const total = counts.good + counts.bad;
+        if (total === 0) continue;
+        const badRate = (counts.bad / total * 100).toFixed(1);
+        dataText += `| ${dimName} | ${f} | ${counts.good} | ${counts.bad} | ${total} | ${badRate}% |\n`;
       }
     }
   }
@@ -1374,27 +1501,43 @@ async function runAIAnalysis() {
 
   const dataText = buildAnalysisPrompt();
 
-  const systemPrompt = `你是一位专业的视频生成模型评测分析师。根据用户提供的 GSB 人工盲评数据，产出结构化分析报告。
+  const systemPrompt = `你是一位专业的视频生成模型评测分析师。给领导看的报告：30秒能看懂结论，有数据支撑，有规律性洞察。
 
-GSB 评分体系：
+## GSB 评分体系
 - G (Good) / G（Good）：模型A（我方）明确更好
 - As bad / AS bad：两方接近，但我方略好（注意：名称反直觉）
 - As good / AS good：两方接近，但竞品略好（注意：名称反直觉）
 - B (Bad) / B（Bad）：竞品明确更好
+- GSB = (G占比 + 0.5×Similar占比) / (B占比 + 0.5×Similar占比)
+- GSB > 1 我方优，< 1 竞品优，=1 持平
 
-GSB = (我方胜率 + 0.5 × Similar率) / (竞品胜率 + 0.5 × Similar率)
-GSB > 1 我方优，< 1 竞品优
+## 报告结构（严格按此输出）
 
-报告要求：
-1. 综合表现总述：2-3 句概括 + 数据表（按 GSB 降序）+ 3-4 条关键观察
-2. 按标签分类汇总表现：数据表 + 3-5 条观察
-3. 二级影响因素分析（如有数据）：综合评价影响因素 + 各维度内部短板
+### 一、评测结果汇总
+- 1句话整体判断（如"综合GSB=X.XX，Ours整体领先/落后/持平"）
+- 评测规模（题数、人数、维度数）
+- GSB汇总表（所有维度，按GSB降序排列，一行一维度）
+- 3-4条**关键观察**
 
-写作原则：
-- 中文行文，简洁直接
-- 每条观察以加粗关键词开头，是独立洞察不是数据复述
-- 不给优化建议，不写总结段落
-- 百分比两位小数，GSB 两到三位小数`;
+### 二、分类表现（只展开有信息量的标签）
+**重要：不要把每个标签都展开成表格！** 判断标准：
+- 如果某标签下各值的GSB差异很小（均在0.9-1.1之间），一句话带过即可
+- 只有差异显著的标签（出现GSB<0.7或>1.4的值）才值得展开表格
+- 每个展开的标签：只列综合评价的GSB列（不需要列所有维度），按GSB升序
+- 每个表格后2-3条观察，找规律而非复述数字
+
+### 三、二级影响因素（如有数据）
+- 只关注出现频次高的top因素
+- 找出哪些因素集中在Bad方向（说明这是短板）
+
+## 写作原则
+- 中文行文，简洁直接，像给领导写的周报
+- 观察以**加粗关键词**开头，是规律性洞察不是数据复述
+- 好的观察举例："**感知质量vs运动执行的干净对立**：我方赢的维度属于画面内容层，输的维度属于时序执行层"
+- 坏的观察举例："视觉美学GSB为1.19，高于语义跟随的0.84"（这是念数字，不是洞察）
+- 不给优化建议，不写总结段落，不写"综上所述"
+- 百分比一位小数，GSB两到三位小数
+- 总字数控制在800字以内（不含表格）`;
 
   try {
     const response = await fetch(`${baseUrl}/v1/messages`, {
