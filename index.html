@@ -116,6 +116,21 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
 .assistant-chat-input button { padding: 8px 14px; background: #7c3aed; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
 .assistant-chat-input button:disabled { background: #ccc; }
 
+.worst-cases { padding: 16px; }
+.worst-case-item { background: #f8fafc; border: 1px solid #e8ecf0; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.worst-case-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.worst-case-header .rank { font-size: 13px; font-weight: 600; color: #c62828; background: #fde8e8; padding: 3px 8px; border-radius: 4px; }
+.worst-case-header .gsb-val { font-size: 14px; font-weight: 600; color: #c62828; }
+.worst-case-prompt { font-size: 13px; color: #333; margin-bottom: 12px; line-height: 1.5; background: #fff; padding: 8px 10px; border-radius: 6px; border: 1px solid #eee; }
+.worst-case-videos { display: flex; gap: 12px; margin-bottom: 10px; }
+.worst-case-videos .video-col { flex: 1; }
+.worst-case-videos .video-col label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; color: #555; }
+.worst-case-videos video { width: 100%; border-radius: 6px; background: #000; }
+.worst-case-scores { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.worst-case-scores .score-chip { font-size: 11px; padding: 3px 8px; border-radius: 4px; background: #eee; }
+.worst-case-scores .score-chip.good { background: #e8f5e9; color: #2e7d32; }
+.worst-case-scores .score-chip.bad { background: #fde8e8; color: #c62828; }
+
 .config-dim-panel { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 .config-dim-panel h2 { font-size: 16px; margin-bottom: 4px; color: #333; cursor: pointer; display: flex; align-items: center; gap: 8px; }
 .config-dim-panel h2::before { content: '▶'; font-size: 11px; transition: transform 0.2s; }
@@ -518,6 +533,22 @@ function processData() {
   const hasFactors = dimCols.some(d => d.factorCol !== null);
 
   // Generate results
+  // Extract prompt metadata (text + URLs) from first person's data
+  const modelACol = headers.indexOf('模型A') >= 0 ? headers.indexOf('模型A') : headers.indexOf('模型A');
+  const modelBCol = headers.indexOf('模型B') >= 0 ? headers.indexOf('模型B') : headers.indexOf('模型B');
+  const promptCol = headers.indexOf('prompt') >= 0 ? headers.indexOf('prompt') : (headers.indexOf('prompt_env') >= 0 ? headers.indexOf('prompt_env') : 1);
+
+  const promptMeta = [];
+  for (let i = 0; i < promptCount; i++) {
+    const row = personData[0][i];
+    promptMeta.push({
+      index: i + 1,
+      prompt: row[promptCol] || '',
+      modelAUrl: modelACol >= 0 ? (row[modelACol] || '') : '',
+      modelBUrl: modelBCol >= 0 ? (row[modelBCol] || '') : ''
+    });
+  }
+
   results = {
     scene: detectedScene,
     promptCount,
@@ -527,6 +558,7 @@ function processData() {
     tagCols,
     ratingFormat,
     hasFactors,
+    promptMeta,
     summary: computeSummary(personData, dimCols, ratingFormat, promptCount, personNames),
     dimensionBreakdown: computeDimensionBreakdown(personData, dimCols, tagCols, ratingFormat, headers, config.tags),
     personalSummary: computePersonalSummary(personData, dimCols, ratingFormat, personNames, promptCount),
@@ -861,6 +893,7 @@ function renderTab(idx, tabNames) {
   else if (name === '维度汇总') renderDimensionTab(content);
   else if (name === '二级维度汇总') renderFactorTab(content);
   else if (name === '个人数据汇总') renderPersonalTab(content);
+  else if (name === '最差案例') renderWorstCasesTab(content);
   else if (name === 'AI 分析报告') {
     if (results.aiReport) renderAIReport(content, results.aiReport);
     else content.innerHTML = '<div class="empty-state"><p>点击"AI 生成分析报告"按钮开始</p></div>';
@@ -988,6 +1021,62 @@ function renderPersonalTab(container) {
   }
 
   html += '</table></div>';
+  container.innerHTML = html;
+}
+
+function renderWorstCasesTab(container) {
+  const { personalSummary, dimCols, ratingFormat, promptMeta } = results;
+  if (!personalSummary || !promptMeta) {
+    container.innerHTML = '<div class="empty-state"><p>无数据</p></div>';
+    return;
+  }
+
+  // Calculate overall GSB per prompt (using 综合评价 = last dimension)
+  const lastDimIdx = dimCols.length - 1;
+  const promptGSBs = personalSummary.map((row, i) => {
+    const c = row.consensus[lastDimIdx];
+    return { index: i, gsb: c.gsb, counts: c.counts };
+  });
+
+  // Sort by GSB ascending (worst first)
+  promptGSBs.sort((a, b) => a.gsb - b.gsb);
+  const worst20 = promptGSBs.slice(0, 20);
+
+  let html = '<div class="worst-cases">';
+  html += '<p style="font-size:13px;color:#666;margin-bottom:12px;">按综合评价 GSB 升序，展示表现最差的 20 条 prompt（GSB 越低 = 模型A越差）</p>';
+
+  for (let rank = 0; rank < worst20.length; rank++) {
+    const item = worst20[rank];
+    const meta = promptMeta[item.index];
+    const row = personalSummary[item.index];
+
+    html += `<div class="worst-case-item">`;
+    html += `<div class="worst-case-header"><span class="rank">#${rank + 1} (序号${meta.index})</span><span class="gsb-val">GSB: ${item.gsb === Infinity ? '∞' : item.gsb.toFixed(3)}</span></div>`;
+    html += `<div class="worst-case-prompt">${escapeHtml(String(meta.prompt).slice(0, 200))}</div>`;
+
+    if (meta.modelAUrl || meta.modelBUrl) {
+      html += `<div class="worst-case-videos">`;
+      if (meta.modelAUrl) {
+        html += `<div class="video-col"><label>模型A</label><video controls preload="metadata" src="${meta.modelAUrl}"></video></div>`;
+      }
+      if (meta.modelBUrl) {
+        html += `<div class="video-col"><label>模型B</label><video controls preload="metadata" src="${meta.modelBUrl}"></video></div>`;
+      }
+      html += `</div>`;
+    }
+
+    // Show per-dimension scores
+    html += `<div class="worst-case-scores">`;
+    for (let di = 0; di < dimCols.length; di++) {
+      const c = row.consensus[di];
+      const cls = c.gsb > 1 ? 'good' : c.gsb < 1 ? 'bad' : '';
+      html += `<span class="score-chip ${cls}">${dimCols[di].name.slice(0,4)}: ${c.gsb === Infinity ? '∞' : c.gsb.toFixed(2)}</span>`;
+    }
+    html += `</div>`;
+    html += `</div>`;
+  }
+
+  html += '</div>';
   container.innerHTML = html;
 }
 
@@ -1401,6 +1490,7 @@ function getTabNames() {
   const names = ['汇总结果', '维度汇总'];
   if (results.hasFactors) names.push('二级维度汇总');
   names.push('个人数据汇总');
+  names.push('最差案例');
   if (results.aiReport) names.push('AI 分析报告');
   if (results.qcReport) names.push('人员质检');
   return names;
