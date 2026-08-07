@@ -99,6 +99,23 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
 .history-item-actions button.delete { border-color: #ef5350; color: #ef5350; }
 .history-empty { text-align: center; padding: 20px; color: #999; font-size: 13px; }
 
+/* Floating assistant ball */
+.assistant-ball { position: fixed; bottom: 30px; right: 30px; width: 56px; height: 56px; border-radius: 50%; background: #7c3aed; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 24px; cursor: pointer; box-shadow: 0 4px 12px rgba(124,58,237,0.4); z-index: 1000; transition: transform 0.2s; }
+.assistant-ball:hover { transform: scale(1.1); }
+.assistant-chat { position: fixed; bottom: 100px; right: 30px; width: 400px; max-height: 500px; background: #fff; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.15); z-index: 1000; display: none; flex-direction: column; overflow: hidden; }
+.assistant-chat.open { display: flex; }
+.assistant-chat-header { padding: 14px 16px; background: #7c3aed; color: #fff; font-size: 14px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+.assistant-chat-header button { background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; }
+.assistant-chat-messages { flex: 1; overflow-y: auto; padding: 12px 16px; max-height: 340px; }
+.assistant-chat-messages .msg { margin-bottom: 10px; font-size: 13px; line-height: 1.6; }
+.assistant-chat-messages .msg.user { text-align: right; }
+.assistant-chat-messages .msg.user span { background: #eef2ff; padding: 6px 10px; border-radius: 8px; display: inline-block; max-width: 85%; text-align: left; }
+.assistant-chat-messages .msg.assistant span { background: #f5f5f5; padding: 6px 10px; border-radius: 8px; display: inline-block; max-width: 85%; }
+.assistant-chat-input { display: flex; border-top: 1px solid #eee; padding: 10px; gap: 8px; }
+.assistant-chat-input input { flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; }
+.assistant-chat-input button { padding: 8px 14px; background: #7c3aed; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.assistant-chat-input button:disabled { background: #ccc; }
+
 .config-dim-panel { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 .config-dim-panel h2 { font-size: 16px; margin-bottom: 4px; color: #333; cursor: pointer; display: flex; align-items: center; gap: 8px; }
 .config-dim-panel h2::before { content: '▶'; font-size: 11px; transition: transform 0.2s; }
@@ -219,6 +236,22 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
   <div class="history-panel" id="historyPanel">
     <h2>历史记录 <button class="btn-clear-history" id="clearHistoryBtn">清空</button></h2>
     <div class="history-list" id="historyList"></div>
+  </div>
+</div>
+
+<!-- Floating Assistant -->
+<div class="assistant-ball" id="assistantBall" title="配置小助手">?</div>
+<div class="assistant-chat" id="assistantChat">
+  <div class="assistant-chat-header">
+    <span>配置小助手</span>
+    <button id="assistantClose">&times;</button>
+  </div>
+  <div class="assistant-chat-messages" id="assistantMessages">
+    <div class="msg assistant"><span>你好！我是配置小助手。你可以问我关于维度配置、标签映射、数据格式等任何问题。需要先在上方填写 API Key 才能使用。</span></div>
+  </div>
+  <div class="assistant-chat-input">
+    <input type="text" id="assistantInput" placeholder="问我任何配置相关的问题...">
+    <button id="assistantSend">发送</button>
   </div>
 </div>
 
@@ -1500,6 +1533,143 @@ document.getElementById('clearHistoryBtn').addEventListener('click', () => {
 // Init on page load
 loadSavedConfig();
 renderHistory();
+
+// ==================== Floating Assistant ====================
+const assistantBall = document.getElementById('assistantBall');
+const assistantChat = document.getElementById('assistantChat');
+const assistantMessages = document.getElementById('assistantMessages');
+const assistantInput = document.getElementById('assistantInput');
+const assistantSend = document.getElementById('assistantSend');
+let assistantHistory = [];
+
+assistantBall.addEventListener('click', () => assistantChat.classList.toggle('open'));
+document.getElementById('assistantClose').addEventListener('click', () => assistantChat.classList.remove('open'));
+
+assistantInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAssistantMsg(); } });
+assistantSend.addEventListener('click', sendAssistantMsg);
+
+function getAssistantSystemPrompt() {
+  const prd = `# 评测数据自动汇总工具说明
+
+## 工具功能
+上传"原始数据汇总"Excel，自动产出：汇总结果、维度汇总、二级维度汇总、个人数据汇总。支持 AI 分析报告和评测人员质检。
+
+## 数据输入
+唯一核心输入是"原始数据汇总"表——扁平表，每行=一个评测人对一条prompt的打分。总行数=评测人数×prompt数。按评测人顺序排列，序号列回到1表示新一轮。
+
+辅助输入：测评人信息表，提供姓名。若表头有两个"姓名"列且两侧人数相等→配对模式（"周海清/张一鸣"）。
+
+## 配置面板说明
+### 一级维度
+每行一个维度名称，必须与Excel表头完全一致。系统通过名称匹配找到列位置。维度列后如果紧跟空表头列，自动识别为影响因素列。
+
+### 标签体系
+格式：标签名 | yes/no | 标签值1,标签值2,...
+- 标签名：匹配Excel表头
+- yes/no：是否多选。多选标签自动将后续空表头列作为副列
+- 标签值列表：完整枚举。数据中未出现的标签值统计结果显示0
+
+### 二级维度
+格式：一级维度名 | 二级维度1,二级维度2,...
+即影响因素的完整选项列表。数据中未出现的二级维度显示为0。
+
+### 打分选项
+格式：Good选项 | As good选项 | As bad选项 | Bad选项
+必须与Excel中实际的单元格值完全一致（注意全角/半角括号）。
+- G(Good) + As bad = Good方向（模型A更好）
+- B(Bad) + As good = Bad方向（模型B更好）
+注意：As good/As bad名称反直觉！
+
+### GSB公式
+GSB = (G占比 + 0.5×Similar占比) / (B占比 + 0.5×Similar占比)
+Similar = As good + As bad
+
+## 输出说明
+- 汇总结果：每人+总值的G/Ag/Ab/B计数、占比、GSB
+- 维度汇总：按标签值分组统计各维度GSB
+- 二级维度汇总：影响因素在Good/Bad方向的出现次数
+- 个人数据汇总：按prompt聚合N人打分的综合结论
+
+## 三个预设场景
+- T2V：文生视频。5个一级维度+6套标签体系
+- T2AV：文生音视频。6个一级维度（多了声音效果）
+- WM：World Model。6个一级维度+1套标签（task_type）
+`;
+
+  const codeArch = `# 代码架构
+
+## 核心函数
+- processData(): 主入口。检测场景→读配置→解析数据→计算全部输出
+- findDimensionColumns(headers, dimNames): 按配置维度名匹配表头列位置
+- findTagColumns(headers, tagDefs): 按配置标签名匹配表头，多选自动找副列
+- parsePersonInfo(sheet, count, mode): 解析测评人信息，支持单列/配对
+- computeSummary(): 按评测人分组统计G/Ag/Ab/B→占比→GSB
+- computeDimensionBreakdown(): 按标签值筛选行→统计各维度GSB
+- computeFactorSummary(): 遍历影响因素JSON→按Good/Bad方向计数
+- computePersonalSummary(): 按prompt聚合N人→算综合GSB结论
+
+## 配置系统
+- PRESETS对象：包含T2V/T2AV/WM三套完整预设
+- getActiveConfig(): 从配置面板DOM读取当前配置
+- loadPreset(name): 加载预设到面板
+- saveCustomConfig(): 保存到localStorage
+
+## 自动识别逻辑
+- 场景检测：表头含"task_type"→WM，否则→T2V
+- 评测人数：序号列回到1的位置=prompt数，总行/prompt数=人数
+- 影响因素列：维度列后紧跟空表头列→识别为因素列
+- 配对模式：测评人信息有两个"姓名"列且两侧人数相等
+`;
+
+  return prd + '\n' + codeArch;
+}
+
+async function sendAssistantMsg() {
+  const apiKey = document.getElementById('apiKey').value.trim();
+  if (!apiKey) { alert('请先填写 API Key'); return; }
+
+  const text = assistantInput.value.trim();
+  if (!text) return;
+
+  assistantInput.value = '';
+  assistantMessages.innerHTML += `<div class="msg user"><span>${escapeHtml(text)}</span></div>`;
+  assistantMessages.scrollTop = assistantMessages.scrollHeight;
+
+  assistantHistory.push({ role: 'user', content: text });
+  assistantSend.disabled = true;
+
+  try {
+    const baseUrl = document.getElementById('apiBaseUrl').value.trim();
+    const model = document.getElementById('aiModel').value;
+
+    const response = await fetch(`${baseUrl}/v1/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: model,
+        max_tokens: 1024,
+        system: getAssistantSystemPrompt(),
+        messages: assistantHistory
+      })
+    });
+
+    if (!response.ok) throw new Error(`API ${response.status}`);
+    const data = await response.json();
+    const reply = data.content[0].text;
+
+    assistantHistory.push({ role: 'assistant', content: reply });
+    assistantMessages.innerHTML += `<div class="msg assistant"><span>${escapeHtml(reply)}</span></div>`;
+    assistantMessages.scrollTop = assistantMessages.scrollHeight;
+  } catch (err) {
+    assistantMessages.innerHTML += `<div class="msg assistant"><span style="color:#c62828;">请求失败: ${err.message}</span></div>`;
+  } finally {
+    assistantSend.disabled = false;
+  }
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+}
 </script>
 </body>
 </html>
