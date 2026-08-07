@@ -225,7 +225,6 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
     <button class="btn btn-ai" id="aiBtn" disabled>AI 生成分析报告</button>
     <button class="btn btn-ai" id="qcBtn" disabled style="background:#e65100;">AI 评测人员质检</button>
     <button class="btn btn-export" id="exportBtn" disabled>导出 Excel</button>
-    <button class="btn btn-export" id="exportCsvBtn" disabled style="background:#2e7d32;">导出 CSV</button>
     <button class="btn btn-export" id="exportReportsBtn" disabled style="background:#1565c0;">导出报告(MD)</button>
     <button class="btn" id="saveBtn" disabled style="background:#5c6bc0;">保存记录</button>
   </div>
@@ -445,7 +444,6 @@ document.getElementById('processBtn').addEventListener('click', () => {
     processData();
     showStatus('success', '计算完成！');
     document.getElementById('exportBtn').disabled = false;
-    document.getElementById('exportCsvBtn').disabled = false;
     document.getElementById('exportReportsBtn').disabled = false;
     document.getElementById('saveBtn').disabled = false;
   } catch (err) {
@@ -995,7 +993,6 @@ function renderPersonalTab(container) {
 
 // Export
 document.getElementById('exportBtn').addEventListener('click', exportExcel);
-document.getElementById('exportCsvBtn').addEventListener('click', exportCSV);
 document.getElementById('exportReportsBtn').addEventListener('click', exportReports);
 
 function exportExcel() {
@@ -1192,65 +1189,6 @@ function exportExcel() {
   }
 
   XLSX.writeFile(wb, `评测汇总结果_${new Date().toISOString().slice(0,10)}.xlsx`);
-}
-
-function exportCSV() {
-  if (!results) return;
-  const zip = [];
-  const date = new Date().toISOString().slice(0,10);
-
-  // 汇总结果 CSV
-  let csv1 = '区块,能力类型,B(Bad)数,As good数,As bad数,G(Good)数,B占比,As good占比,As bad占比,G占比,Similar占比,GSB\n';
-  function addBlockCsv(block) {
-    for (const dim of block.dims) {
-      const sim = dim.ratios.as_good + dim.ratios.as_bad;
-      csv1 += `${block.name},${dim.name},${dim.counts.bad},${dim.counts.as_good},${dim.counts.as_bad},${dim.counts.good},${(dim.ratios.bad*100).toFixed(2)}%,${(dim.ratios.as_good*100).toFixed(2)}%,${(dim.ratios.as_bad*100).toFixed(2)}%,${(dim.ratios.good*100).toFixed(2)}%,${(sim*100).toFixed(2)}%,${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)}\n`;
-    }
-  }
-  addBlockCsv(results.summary.total);
-  for (const p of results.summary.persons) addBlockCsv(p);
-  downloadFile(`汇总结果_${date}.csv`, csv1);
-
-  // 维度汇总 CSV
-  let csv2 = '标签体系,标签值,样本数,维度,B占比,As good占比,As bad占比,G占比,Similar占比,GSB\n';
-  for (const bd of results.dimensionBreakdown) {
-    for (const val of bd.values) {
-      for (const dim of val.dims) {
-        const sim = dim.ratios.as_good + dim.ratios.as_bad;
-        csv2 += `${bd.tagName},${val.value},${val.matchedCount},${dim.name},${(dim.ratios.bad*100).toFixed(2)}%,${(dim.ratios.as_good*100).toFixed(2)}%,${(dim.ratios.as_bad*100).toFixed(2)}%,${(dim.ratios.good*100).toFixed(2)}%,${(sim*100).toFixed(2)}%,${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)}\n`;
-      }
-    }
-  }
-  downloadFile(`维度汇总_${date}.csv`, csv2);
-
-  // 二级维度汇总 CSV
-  if (results.hasFactors && results.factorSummary) {
-    let csv3 = '一级分类,二级分类,Good方向次数,Bad方向次数,合计\n';
-    for (const [dimName, factors] of Object.entries(results.factorSummary)) {
-      for (const [f, counts] of Object.entries(factors)) {
-        csv3 += `${dimName},${f},${counts.good},${counts.bad},${counts.good + counts.bad}\n`;
-      }
-    }
-    downloadFile(`二级维度汇总_${date}.csv`, csv3);
-  }
-
-  // 个人数据汇总 CSV
-  if (results.personalSummary && results.personalSummary.length > 0) {
-    const { personalSummary, dimCols, personNames, ratingFormat } = results;
-    let header = '序号';
-    for (const dim of dimCols) header += `,综合-${dim.name}`;
-    for (const pn of personNames) { for (const dim of dimCols) header += `,${pn}-${dim.name}`; }
-    let csv4 = header + '\n';
-    for (const row of personalSummary) {
-      let line = `${row.index}`;
-      for (const c of row.consensus) line += `,${c.label}`;
-      for (const pr of row.personRatings) { for (const r of pr) line += `,${r}`; }
-      csv4 += line + '\n';
-    }
-    downloadFile(`个人数据汇总_${date}.csv`, csv4);
-  }
-
-  showStatus('success', 'CSV 文件已导出');
 }
 
 function exportReports() {
