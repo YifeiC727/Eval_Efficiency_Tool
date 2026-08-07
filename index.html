@@ -1001,13 +1001,12 @@ document.getElementById('exportReportsBtn').addEventListener('click', exportRepo
 function exportExcel() {
   if (!results) return;
   const wb = XLSX.utils.book_new();
+  const { summary, dimensionBreakdown, hasFactors, factorSummary, personalSummary, dimCols, personNames, ratingFormat, promptCount, personCount } = results;
 
   // Helper: create sheet from data and apply formulas
   function createSheetWithFormulas(data) {
-    // Separate formulas from values
     const values = data.map(row => row.map(cell => cell && cell.f ? '' : cell));
     const ws = XLSX.utils.aoa_to_sheet(values);
-    // Apply formulas
     for (let r = 0; r < data.length; r++) {
       for (let c = 0; c < data[r].length; c++) {
         const cell = data[r][c];
@@ -1020,22 +1019,90 @@ function exportExcel() {
     return ws;
   }
 
-  // Sheet 1: 汇总结果 (with formulas)
+  // --- Sheet: 原始数据汇总 (copy from uploaded workbook) ---
+  if (workbookData && workbookData.Sheets['原始数据汇总']) {
+    wb.SheetNames.push('原始数据汇总');
+    wb.Sheets['原始数据汇总'] = workbookData.Sheets['原始数据汇总'];
+  }
+
+  // --- Sheet: 测评人信息 (copy from uploaded workbook) ---
+  if (workbookData && workbookData.Sheets['测评人信息']) {
+    wb.SheetNames.push('测评人信息');
+    wb.Sheets['测评人信息'] = workbookData.Sheets['测评人信息'];
+  }
+
+  // --- Sheet: 个人数据汇总 ---
+  const personalData = [];
+  const pHeader = ['序号'];
+  for (const dim of dimCols) pHeader.push(`综合-${dim.name}`);
+  for (const pn of personNames) { for (const dim of dimCols) pHeader.push(`${pn}-${dim.name}`); }
+  personalData.push(pHeader);
+  for (const pRow of personalSummary) {
+    const r = [pRow.index];
+    for (const c of pRow.consensus) r.push(c.label);
+    for (const pr of pRow.personRatings) { for (const rating of pr) r.push(rating); }
+    personalData.push(r);
+  }
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(personalData), '个人数据汇总');
+
+  // --- Sheet: 汇总结果 (COUNTIF formulas referencing 个人数据汇总) ---
   const summaryData = [];
-  let row = 0;
-  function addBlock(block) {
+  let sRow = 0;
+
+  // Figure out column letters for each person's dimensions in 个人数据汇总
+  // Layout: col A=序号, B..=综合dims, then person1 dims, person2 dims...
+  const numDims = dimCols.length;
+  const personStartCol = 1 + numDims; // 0-indexed column where person 1 starts
+
+  function getPersonDimCol(personIdx, dimIdx) {
+    const colIdx = personStartCol + personIdx * numDims + dimIdx;
+    return XLSX.utils.encode_col(colIdx);
+  }
+
+  const dataRange = `$2:$${promptCount + 1}`;
+
+  function addBlock(block, personIdx) {
     summaryData.push([block.name]);
-    row++;
+    sRow++;
     summaryData.push(['能力类型', 'B(Bad)数', 'As good数', 'As bad数', 'G(Good)数', 'B占比', 'As good占比', 'As bad占比', 'G占比', 'Similar占比', 'GSB']);
-    row++;
-    for (const dim of block.dims) {
-      const r = row + 1; // 1-indexed for Excel
+    sRow++;
+
+    for (let di = 0; di < block.dims.length; di++) {
+      const dim = block.dims[di];
+      const r = sRow + 1; // 1-indexed Excel row
+
+      let bFormula, agFormula, abFormula, gFormula;
+
+      if (personIdx === -1) {
+        // Total: sum all person rows for this dimension
+        const personFormulas = { b: [], ag: [], ab: [], g: [] };
+        for (let p = 0; p < personCount; p++) {
+          const col = getPersonDimCol(p, di);
+          const range = `个人数据汇总!${col}${dataRange}`;
+          personFormulas.b.push(`COUNTIF(${range},"${ratingFormat.bad}")`);
+          personFormulas.ag.push(`COUNTIF(${range},"${ratingFormat.as_good}")`);
+          personFormulas.ab.push(`COUNTIF(${range},"${ratingFormat.as_bad}")`);
+          personFormulas.g.push(`COUNTIF(${range},"${ratingFormat.good}")`);
+        }
+        bFormula = personFormulas.b.join('+');
+        agFormula = personFormulas.ag.join('+');
+        abFormula = personFormulas.ab.join('+');
+        gFormula = personFormulas.g.join('+');
+      } else {
+        const col = getPersonDimCol(personIdx, di);
+        const range = `个人数据汇总!${col}${dataRange}`;
+        bFormula = `COUNTIF(${range},"${ratingFormat.bad}")`;
+        agFormula = `COUNTIF(${range},"${ratingFormat.as_good}")`;
+        abFormula = `COUNTIF(${range},"${ratingFormat.as_bad}")`;
+        gFormula = `COUNTIF(${range},"${ratingFormat.good}")`;
+      }
+
       summaryData.push([
         dim.name,
-        dim.counts.bad,
-        dim.counts.as_good,
-        dim.counts.as_bad,
-        dim.counts.good,
+        { f: bFormula },
+        { f: agFormula },
+        { f: abFormula },
+        { f: gFormula },
         { f: `B${r}/(B${r}+C${r}+D${r}+E${r})` },
         { f: `C${r}/(B${r}+C${r}+D${r}+E${r})` },
         { f: `D${r}/(B${r}+C${r}+D${r}+E${r})` },
@@ -1043,30 +1110,58 @@ function exportExcel() {
         { f: `G${r}+H${r}` },
         { f: `(I${r}+0.5*J${r})/(F${r}+0.5*J${r})` }
       ]);
-      row++;
+      sRow++;
     }
     summaryData.push([]);
-    row++;
+    sRow++;
   }
-  addBlock(results.summary.total);
-  for (const p of results.summary.persons) addBlock(p);
+
+  addBlock(summary.total, -1);
+  for (let p = 0; p < summary.persons.length; p++) {
+    addBlock(summary.persons[p], p);
+  }
   XLSX.utils.book_append_sheet(wb, createSheetWithFormulas(summaryData), '汇总结果');
 
-  // Sheet 2: 维度汇总 (with formulas)
-  const dimData = [];
+  // --- Sheet: 维度汇总 (COUNTIFS formulas referencing 原始数据汇总) ---
+  // Find the column letters in 原始数据汇总 for tags and dims
+  const rawHeaders = XLSX.utils.sheet_to_json(workbookData.Sheets['原始数据汇总'], { header: 1 })[0];
+  const rawDimColLetters = dimCols.map(d => XLSX.utils.encode_col(d.col));
+
+  const dimSheetData = [];
   let dRow = 0;
-  for (const bd of results.dimensionBreakdown) {
-    dimData.push([bd.tagName]);
+
+  for (let ti = 0; ti < results.tagCols.length; ti++) {
+    const tag = results.tagCols[ti];
+    const bd = dimensionBreakdown[ti];
+    const tagColLetters = tag.cols.map(c => XLSX.utils.encode_col(c));
+
+    dimSheetData.push([bd.tagName]);
     dRow++;
-    dimData.push(['标签值', '样本数', '能力类型', 'B(Bad)数', 'As good数', 'As bad数', 'G(Good)数', 'B占比', 'As good占比', 'As bad占比', 'G占比', 'Similar占比', 'GSB']);
+    dimSheetData.push(['标签值', '样本数', '能力类型', 'B(Bad)数', 'As good数', 'As bad数', 'G(Good)数', 'B占比', 'As good占比', 'As bad占比', 'G占比', 'Similar占比', 'GSB']);
     dRow++;
+
     for (const val of bd.values) {
       for (let di = 0; di < val.dims.length; di++) {
-        const dim = val.dims[di];
         const r = dRow + 1;
-        dimData.push([
-          di === 0 ? val.value : '', di === 0 ? val.matchedCount : '', dim.name,
-          dim.counts.bad, dim.counts.as_good, dim.counts.as_bad, dim.counts.good,
+        const dimColLetter = rawDimColLetters[di];
+
+        // Build COUNTIFS: match tag value in any of the tag columns OR
+        let countBase;
+        if (tagColLetters.length === 1) {
+          countBase = (rating) => `COUNTIFS(原始数据汇总!$${tagColLetters[0]}:$${tagColLetters[0]},"${val.value}",原始数据汇总!$${dimColLetter}:$${dimColLetter},"${rating}")`;
+        } else {
+          // Multiple tag cols: sum COUNTIFS for each col
+          countBase = (rating) => tagColLetters.map(tl =>
+            `COUNTIFS(原始数据汇总!$${tl}:$${tl},"${val.value}",原始数据汇总!$${dimColLetter}:$${dimColLetter},"${rating}")`
+          ).join('+');
+        }
+
+        dimSheetData.push([
+          di === 0 ? val.value : '', di === 0 ? val.matchedCount : '', val.dims[di].name,
+          { f: countBase(ratingFormat.bad) },
+          { f: countBase(ratingFormat.as_good) },
+          { f: countBase(ratingFormat.as_bad) },
+          { f: countBase(ratingFormat.good) },
           { f: `IF(D${r}+E${r}+F${r}+G${r}=0,"",D${r}/(D${r}+E${r}+F${r}+G${r}))` },
           { f: `IF(D${r}+E${r}+F${r}+G${r}=0,"",E${r}/(D${r}+E${r}+F${r}+G${r}))` },
           { f: `IF(D${r}+E${r}+F${r}+G${r}=0,"",F${r}/(D${r}+E${r}+F${r}+G${r}))` },
@@ -1077,16 +1172,16 @@ function exportExcel() {
         dRow++;
       }
     }
-    dimData.push([]);
+    dimSheetData.push([]);
     dRow++;
   }
-  XLSX.utils.book_append_sheet(wb, createSheetWithFormulas(dimData), '维度汇总');
+  XLSX.utils.book_append_sheet(wb, createSheetWithFormulas(dimSheetData), '维度汇总');
 
-  // Sheet 3: 二级维度汇总
-  if (results.hasFactors && results.factorSummary) {
+  // --- Sheet: 二级维度汇总 ---
+  if (hasFactors && factorSummary) {
     const factorData = [['一级分类', '二级分类', 'Good方向次数', 'Bad方向次数', '合计']];
     let fRow = 1;
-    for (const [dimName, factors] of Object.entries(results.factorSummary)) {
+    for (const [dimName, factors] of Object.entries(factorSummary)) {
       const sorted = Object.entries(factors).sort((a, b) => (b[1].good + b[1].bad) - (a[1].good + a[1].bad));
       for (const [f, counts] of sorted) {
         fRow++;
@@ -1095,22 +1190,6 @@ function exportExcel() {
     }
     XLSX.utils.book_append_sheet(wb, createSheetWithFormulas(factorData), '二级维度汇总');
   }
-
-  // Sheet 4: 个人数据汇总
-  const { personalSummary, dimCols, personNames, ratingFormat } = results;
-  const personalData = [];
-  const pHeader = ['序号'];
-  for (const dim of dimCols) pHeader.push(`综合-${dim.name}`);
-  for (const pn of personNames) { for (const dim of dimCols) pHeader.push(`${pn}-${dim.name}`); }
-  personalData.push(pHeader);
-
-  for (const pRow of personalSummary) {
-    const r = [pRow.index];
-    for (const c of pRow.consensus) r.push(c.label);
-    for (const pr of pRow.personRatings) { for (const rating of pr) r.push(rating); }
-    personalData.push(r);
-  }
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(personalData), '个人数据汇总');
 
   XLSX.writeFile(wb, `评测汇总结果_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
