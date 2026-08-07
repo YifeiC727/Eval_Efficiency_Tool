@@ -706,9 +706,6 @@ function generateResults(personData, personNames, dimCols, tagCols, ratingFormat
       modelAUrl: row && modelACol >= 0 ? (row[modelACol] || '') : '',
       modelBUrl: row && modelBCol >= 0 ? (row[modelBCol] || '') : ''
     });
-      modelAUrl: modelACol >= 0 ? (row[modelACol] || '') : '',
-      modelBUrl: modelBCol >= 0 ? (row[modelBCol] || '') : ''
-    });
   }
 
   results = {
@@ -1506,7 +1503,7 @@ function downloadFile(filename, content) {
 document.getElementById('aiBtn').addEventListener('click', runAIAnalysis);
 
 function buildAnalysisPrompt() {
-  const { summary, dimensionBreakdown, hasFactors, factorSummary, scene, promptCount, personCount } = results;
+  const { summary, dimensionBreakdown, hasFactors, factorSummary, dimCols, scene, promptCount, personCount } = results;
 
   let dataText = `## 评测概况\n- 场景: ${scene.toUpperCase()}\n- 评测人数: ${personCount}\n- Prompt 总数: ${promptCount}\n\n`;
 
