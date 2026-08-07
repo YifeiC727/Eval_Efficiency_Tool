@@ -790,9 +790,11 @@ function parsePersonInfo(sheet, personCount, groupMode) {
 
   if (groupMode === 'paired' || (groupMode === 'auto' && isPaired)) {
     for (let i = 1; i < data.length && names.length < personCount; i++) {
-      const n1 = data[i][nameCol1];
-      const n2 = data[i][nameCol2];
-      if (n1 || n2) names.push(`${n1 || ''}/${n2 || ''}`);
+      const n1 = data[i][nameCol1] ? String(data[i][nameCol1]).trim() : '';
+      const n2 = data[i][nameCol2] ? String(data[i][nameCol2]).trim() : '';
+      if (n1 && n2) names.push(`${n1}/${n2}`);
+      else if (n1) names.push(n1);
+      else if (n2) names.push(n2);
     }
   }
 
