@@ -1056,7 +1056,7 @@ function exportExcel() {
     return XLSX.utils.encode_col(colIdx);
   }
 
-  const dataRange = `$2:$${promptCount + 1}`;
+  const lastDataRow = promptCount + 1;
 
   function addBlock(block, personIdx) {
     summaryData.push([block.name]);
@@ -1075,7 +1075,7 @@ function exportExcel() {
         const personFormulas = { b: [], ag: [], ab: [], g: [] };
         for (let p = 0; p < personCount; p++) {
           const col = getPersonDimCol(p, di);
-          const range = `个人数据汇总!${col}${dataRange}`;
+          const range = `个人数据汇总!${col}$2:${col}$${lastDataRow}`;
           personFormulas.b.push(`COUNTIF(${range},"${ratingFormat.bad}")`);
           personFormulas.ag.push(`COUNTIF(${range},"${ratingFormat.as_good}")`);
           personFormulas.ab.push(`COUNTIF(${range},"${ratingFormat.as_bad}")`);
@@ -1087,7 +1087,7 @@ function exportExcel() {
         gFormula = personFormulas.g.join('+');
       } else {
         const col = getPersonDimCol(personIdx, di);
-        const range = `个人数据汇总!${col}${dataRange}`;
+        const range = `个人数据汇总!${col}$2:${col}$${lastDataRow}`;
         bFormula = `COUNTIF(${range},"${ratingFormat.bad}")`;
         agFormula = `COUNTIF(${range},"${ratingFormat.as_good}")`;
         abFormula = `COUNTIF(${range},"${ratingFormat.as_bad}")`;
@@ -1100,12 +1100,12 @@ function exportExcel() {
         { f: agFormula },
         { f: abFormula },
         { f: gFormula },
-        { f: `B${r}/(B${r}+C${r}+D${r}+E${r})` },
-        { f: `C${r}/(B${r}+C${r}+D${r}+E${r})` },
-        { f: `D${r}/(B${r}+C${r}+D${r}+E${r})` },
-        { f: `E${r}/(B${r}+C${r}+D${r}+E${r})` },
+        { f: `IFERROR(B${r}/(B${r}+C${r}+D${r}+E${r}),0)` },
+        { f: `IFERROR(C${r}/(B${r}+C${r}+D${r}+E${r}),0)` },
+        { f: `IFERROR(D${r}/(B${r}+C${r}+D${r}+E${r}),0)` },
+        { f: `IFERROR(E${r}/(B${r}+C${r}+D${r}+E${r}),0)` },
         { f: `G${r}+H${r}` },
-        { f: `(I${r}+0.5*J${r})/(F${r}+0.5*J${r})` }
+        { f: `IFERROR((I${r}+0.5*J${r})/(F${r}+0.5*J${r}),0)` }
       ]);
       sRow++;
     }
