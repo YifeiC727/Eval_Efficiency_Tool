@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>评测数据自动汇总工具</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f7fa; color: #1a1a2e; min-height: 100vh; }
+.container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+.subtitle { color: #666; margin-bottom: 24px; font-size: 14px; }
+
+.config-panel { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.config-panel h2 { font-size: 16px; margin-bottom: 16px; color: #333; }
+.config-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; }
+.config-group { display: flex; flex-direction: column; gap: 6px; }
+.config-group label { font-size: 13px; color: #555; font-weight: 500; }
+.config-group select, .config-group input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+.config-group select { min-width: 160px; }
+
+.upload-area { background: #fff; border: 2px dashed #d0d7de; border-radius: 12px; padding: 40px; text-align: center; cursor: pointer; transition: all 0.2s; margin-bottom: 20px; }
+.upload-area:hover { border-color: #4f8cf7; background: #f8fbff; }
+.upload-area.dragover { border-color: #4f8cf7; background: #eef5ff; }
+.upload-area h3 { font-size: 16px; margin-bottom: 8px; }
+.upload-area p { color: #666; font-size: 13px; }
+.upload-area .icon { font-size: 36px; margin-bottom: 12px; }
+
+.file-info { background: #e8f5e9; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; display: none; font-size: 14px; color: #2e7d32; }
+
+.tabs { display: flex; gap: 2px; background: #e8ecf0; border-radius: 8px; padding: 3px; margin-bottom: 16px; overflow-x: auto; }
+.tab { padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; white-space: nowrap; transition: all 0.2s; color: #555; }
+.tab:hover { color: #333; }
+.tab.active { background: #fff; color: #1a1a2e; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+
+.sheet-content { background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); overflow-x: auto; min-height: 300px; }
+.sheet-content table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.sheet-content th, .sheet-content td { border: 1px solid #e8ecf0; padding: 8px 10px; text-align: center; white-space: nowrap; }
+.sheet-content th { background: #f5f7fa; font-weight: 600; position: sticky; top: 0; }
+.sheet-content td.label { text-align: left; font-weight: 500; background: #fafbfc; }
+.sheet-content .section-header { background: #eef2f7; font-weight: 600; text-align: left; }
+.sheet-content .good { color: #2e7d32; }
+.sheet-content .bad { color: #c62828; }
+
+.btn { padding: 10px 20px; background: #4f8cf7; color: #fff; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; font-weight: 500; transition: all 0.2s; }
+.btn:hover { background: #3a7ae0; }
+.btn:disabled { background: #ccc; cursor: not-allowed; }
+.btn-export { background: #43a047; }
+.btn-export:hover { background: #388e3c; }
+
+.actions { display: flex; gap: 12px; margin-bottom: 20px; }
+.status { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; display: none; font-size: 14px; }
+.status.error { display: block; background: #fde8e8; color: #c62828; }
+.status.success { display: block; background: #e8f5e9; color: #2e7d32; }
+.status.info { display: block; background: #e3f2fd; color: #1565c0; }
+
+.empty-state { text-align: center; padding: 60px 20px; color: #999; }
+.empty-state p { font-size: 14px; }
+
+.table-wrapper { max-height: 600px; overflow: auto; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>评测数据自动汇总工具</h1>
+  <p class="subtitle">上传原始数据汇总表，自动产出汇总结果、维度汇总、二级维度汇总、个人数据汇总</p>
+
+  <div class="config-panel">
+    <h2>评测配置</h2>
+    <div class="config-row">
+      <div class="config-group">
+        <label>评测场景</label>
+        <select id="sceneSelect">
+          <option value="auto">自动识别</option>
+          <option value="t2v">T2V（文生视频）</option>
+          <option value="t2av">T2AV（文生音视频）</option>
+          <option value="wm">WM（World Model）</option>
+        </select>
+      </div>
+      <div class="config-group">
+        <label>评测人分组模式</label>
+        <select id="groupMode">
+          <option value="auto">自动识别</option>
+          <option value="single">单人全量题</option>
+          <option value="paired">两人配对（各做半题）</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="upload-area" id="uploadArea">
+    <div class="icon">📊</div>
+    <h3>点击或拖拽上传 Excel 文件</h3>
+    <p>支持 .xlsx 格式，需包含"原始数据汇总"和"测评人信息"两个 sheet</p>
+  </div>
+  <input type="file" id="fileInput" accept=".xlsx" style="display:none">
+
+  <div class="file-info" id="fileInfo"></div>
+  <div class="status" id="status"></div>
+
+  <div class="actions">
+    <button class="btn" id="processBtn" disabled>开始计算</button>
+    <button class="btn btn-export" id="exportBtn" disabled>导出 Excel</button>
+  </div>
+
+  <div class="tabs" id="tabs" style="display:none"></div>
+  <div class="sheet-content" id="sheetContent">
+    <div class="empty-state"><p>请上传原始数据汇总文件</p></div>
+  </div>
+</div>
+
+<script>
+const RATING_VALUES = {
+  t2v: { good: 'G (Good)', as_good: 'As good', as_bad: 'As bad', bad: 'B (Bad)' },
+  wm: { good: 'G（Good）', as_good: 'AS good', as_bad: 'AS bad', bad: 'B（Bad）' }
+};
+
+let workbookData = null;
+let results = null;
+let detectedScene = null;
+
+// Upload handling
+const uploadArea = document.getElementById('uploadArea');
+const fileInput = document.getElementById('fileInput');
+
+uploadArea.addEventListener('click', () => fileInput.click());
+uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+uploadArea.addEventListener('drop', e => { e.preventDefault(); uploadArea.classList.remove('dragover'); handleFile(e.dataTransfer.files[0]); });
+fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
+
+function handleFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'array' });
+      workbookData = wb;
+      const sheets = wb.SheetNames;
+      document.getElementById('fileInfo').style.display = 'block';
+      document.getElementById('fileInfo').textContent = `已加载: ${file.name} (${sheets.length} sheets: ${sheets.join(', ')})`;
+      document.getElementById('processBtn').disabled = false;
+      showStatus('success', '文件加载成功，点击"开始计算"进行处理');
+    } catch (err) {
+      showStatus('error', '文件解析失败: ' + err.message);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function showStatus(type, msg) {
+  const el = document.getElementById('status');
+  el.className = 'status ' + type;
+  el.textContent = msg;
+}
+
+// Process
+document.getElementById('processBtn').addEventListener('click', () => {
+  try {
+    processData();
+    showStatus('success', '计算完成！');
+    document.getElementById('exportBtn').disabled = false;
+  } catch (err) {
+    showStatus('error', '计算出错: ' + err.message);
+    console.error(err);
+  }
+});
+
+function processData() {
+  const wb = workbookData;
+  if (!wb.Sheets['原始数据汇总']) throw new Error('缺少"原始数据汇总" sheet');
+
+  const rawSheet = XLSX.utils.sheet_to_json(wb.Sheets['原始数据汇总'], { header: 1, defval: null });
+  const headers = rawSheet[0];
+  const dataRows = rawSheet.slice(1).filter(r => r[0] != null);
+
+  // Detect scene
+  const sceneSelect = document.getElementById('sceneSelect').value;
+  if (sceneSelect === 'auto') {
+    detectedScene = headers.includes('task_type') ? 'wm' : 't2v';
+  } else {
+    detectedScene = sceneSelect;
+  }
+
+  const ratingFormat = detectedScene === 'wm' ? RATING_VALUES.wm : RATING_VALUES.t2v;
+
+  // Find dimension columns
+  const dimCols = findDimensionColumns(headers, detectedScene);
+  // Find tag columns
+  const tagCols = findTagColumns(headers, detectedScene);
+
+  // Detect prompt count and person count
+  const seqCol = 0;
+  let promptCount = 0;
+  for (let i = 0; i < dataRows.length; i++) {
+    const seq = parseInt(dataRows[i][seqCol]);
+    if (i > 0 && seq === 1) { promptCount = i; break; }
+  }
+  if (promptCount === 0) promptCount = dataRows.length;
+  const personCount = Math.round(dataRows.length / promptCount);
+
+  // Parse person info
+  let personNames = [];
+  const groupMode = document.getElementById('groupMode').value;
+  if (wb.Sheets['测评人信息']) {
+    personNames = parsePersonInfo(wb.Sheets['测评人信息'], personCount, groupMode);
+  } else {
+    for (let i = 0; i < personCount; i++) personNames.push(`评测人${i+1}`);
+  }
+
+  // Split data by person
+  const personData = [];
+  for (let p = 0; p < personCount; p++) {
+    personData.push(dataRows.slice(p * promptCount, (p + 1) * promptCount));
+  }
+
+  // Check if has factors
+  const hasFactors = detectedScene !== 'wm' && dimCols.some(d => d.factorCol !== null);
+
+  // Generate results
+  results = {
+    scene: detectedScene,
+    promptCount,
+    personCount,
+    personNames,
+    dimCols,
+    tagCols,
+    ratingFormat,
+    hasFactors,
+    summary: computeSummary(personData, dimCols, ratingFormat, promptCount, personNames),
+    dimensionBreakdown: computeDimensionBreakdown(personData, dimCols, tagCols, ratingFormat, headers),
+    personalSummary: computePersonalSummary(personData, dimCols, ratingFormat, personNames, promptCount),
+  };
+
+  if (hasFactors) {
+    results.factorSummary = computeFactorSummary(personData, dimCols, ratingFormat);
+  }
+
+  renderResults();
+}
+
+function findDimensionColumns(headers, scene) {
+  const dims = [];
+  const knownDims = scene === 'wm'
+    ? ['语义跟随', '初始世界一致性', '运动性', '空间时序一致性', '视觉美学', '综合评价']
+    : ['指令遵从与增益', '动态与物理合理性', '镜头语言与跨镜连贯', '视觉美学', '综合评价'];
+
+  for (const dim of knownDims) {
+    const idx = headers.indexOf(dim);
+    if (idx >= 0) {
+      let factorCol = null;
+      if (scene !== 'wm' && idx + 1 < headers.length && headers[idx + 1] == null) {
+        factorCol = idx + 1;
+      }
+      dims.push({ name: dim, col: idx, factorCol });
+    }
+  }
+  return dims;
+}
+
+function findTagColumns(headers, scene) {
+  const tags = [];
+  if (scene === 'wm') {
+    const idx = headers.indexOf('task_type');
+    if (idx >= 0) tags.push({ name: 'task_type', cols: [idx], multi: false });
+  } else {
+    const tagDefs = [
+      { name: '主体类型', multi: true },
+      { name: '人物运动', multi: true },
+      { name: '能力专项', multi: false },
+      { name: '非人运动', multi: false },
+      { name: 'prompt类型', multi: false },
+      { name: '镜头语言', multi: true }
+    ];
+    for (const td of tagDefs) {
+      const idx = headers.indexOf(td.name);
+      if (idx >= 0) {
+        const cols = [idx];
+        // Check adjacent null-header columns (multi-select sub-columns)
+        let next = idx + 1;
+        while (next < headers.length && headers[next] == null && next < idx + 4) {
+          cols.push(next);
+          next++;
+        }
+        tags.push({ name: td.name, cols, multi: td.multi });
+      }
+    }
+  }
+  return tags;
+}
+
+function parsePersonInfo(sheet, personCount, groupMode) {
+  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+  const names = [];
+
+  // Detect structure: look for name column
+  if (groupMode === 'paired' || (groupMode === 'auto' && data[0] && data[0].some(v => v && String(v).includes('组')))) {
+    // Paired: find two name columns
+    const nameCol1 = data[0].findIndex((v, i) => v === '姓名');
+    let nameCol2 = -1;
+    if (nameCol1 >= 0) {
+      nameCol2 = data[0].findIndex((v, i) => v === '姓名' && i > nameCol1);
+    }
+    if (nameCol1 >= 0 && nameCol2 >= 0) {
+      for (let i = 1; i < data.length && names.length < personCount; i++) {
+        const n1 = data[i][nameCol1];
+        const n2 = data[i][nameCol2];
+        if (n1 || n2) names.push(`${n1 || ''}/${n2 || ''}`);
+      }
+    }
+  }
+
+  if (names.length === 0) {
+    // Single column: find 姓名 column
+    const headerRow = data[0] || [];
+    let nameColIdx = headerRow.indexOf('姓名');
+    if (nameColIdx < 0) nameColIdx = 1; // fallback to col B
+    for (let i = 1; i < data.length && names.length < personCount; i++) {
+      const n = data[i][nameColIdx];
+      if (n && String(n).trim()) names.push(String(n).trim());
+    }
+  }
+
+  while (names.length < personCount) names.push(`评测人${names.length + 1}`);
+  return names;
+}
+
+function countRatings(rows, colIdx, ratingFormat) {
+  const counts = { good: 0, as_good: 0, as_bad: 0, bad: 0 };
+  for (const row of rows) {
+    const val = row[colIdx];
+    if (!val) continue;
+    const v = String(val).trim();
+    if (v === ratingFormat.good) counts.good++;
+    else if (v === ratingFormat.as_good) counts.as_good++;
+    else if (v === ratingFormat.as_bad) counts.as_bad++;
+    else if (v === ratingFormat.bad) counts.bad++;
+  }
+  return counts;
+}
+
+function calcGSB(counts) {
+  const similar = counts.as_good + counts.as_bad;
+  const num = counts.good + 0.5 * similar;
+  const den = counts.bad + 0.5 * similar;
+  if (den === 0) return num > 0 ? Infinity : 1;
+  return num / den;
+}
+
+function computeSummary(personData, dimCols, ratingFormat, promptCount, personNames) {
+  const personResults = [];
+  for (let p = 0; p < personData.length; p++) {
+    const dimResults = [];
+    for (const dim of dimCols) {
+      const counts = countRatings(personData[p], dim.col, ratingFormat);
+      const total = counts.good + counts.as_good + counts.as_bad + counts.bad;
+      dimResults.push({
+        name: dim.name,
+        counts,
+        total,
+        ratios: {
+          good: total ? counts.good / total : 0,
+          as_good: total ? counts.as_good / total : 0,
+          as_bad: total ? counts.as_bad / total : 0,
+          bad: total ? counts.bad / total : 0
+        },
+        gsb: calcGSB(counts)
+      });
+    }
+    personResults.push({ name: personNames[p], dims: dimResults });
+  }
+
+  // Total
+  const totalDims = dimCols.map((dim, di) => {
+    const counts = { good: 0, as_good: 0, as_bad: 0, bad: 0 };
+    for (const pr of personResults) {
+      counts.good += pr.dims[di].counts.good;
+      counts.as_good += pr.dims[di].counts.as_good;
+      counts.as_bad += pr.dims[di].counts.as_bad;
+      counts.bad += pr.dims[di].counts.bad;
+    }
+    const total = counts.good + counts.as_good + counts.as_bad + counts.bad;
+    return {
+      name: dim.name,
+      counts,
+      total,
+      ratios: {
+        good: total ? counts.good / total : 0,
+        as_good: total ? counts.as_good / total : 0,
+        as_bad: total ? counts.as_bad / total : 0,
+        bad: total ? counts.bad / total : 0
+      },
+      gsb: calcGSB(counts)
+    };
+  });
+
+  return { total: { name: `${personData.length}人总值`, dims: totalDims }, persons: personResults };
+}
+
+function computeDimensionBreakdown(personData, dimCols, tagCols, ratingFormat, headers) {
+  const allRows = personData.flat();
+  const breakdowns = [];
+
+  for (const tag of tagCols) {
+    // Get unique values
+    const valueSet = new Set();
+    for (const row of allRows) {
+      for (const colIdx of tag.cols) {
+        const v = row[colIdx];
+        if (v && String(v).trim()) valueSet.add(String(v).trim());
+      }
+    }
+    const values = [...valueSet].sort();
+
+    const valueResults = [];
+    for (const val of values) {
+      // Filter rows matching this tag value
+      const matched = allRows.filter(row => {
+        for (const colIdx of tag.cols) {
+          if (row[colIdx] && String(row[colIdx]).trim() === val) return true;
+        }
+        return false;
+      });
+
+      const dimResults = dimCols.map(dim => {
+        const counts = countRatings(matched, dim.col, ratingFormat);
+        const total = counts.good + counts.as_good + counts.as_bad + counts.bad;
+        return {
+          name: dim.name,
+          counts,
+          total,
+          ratios: {
+            good: total ? counts.good / total : 0,
+            as_good: total ? counts.as_good / total : 0,
+            as_bad: total ? counts.as_bad / total : 0,
+            bad: total ? counts.bad / total : 0
+          },
+          gsb: calcGSB(counts)
+        };
+      });
+
+      valueResults.push({ value: val, matchedCount: matched.length, dims: dimResults });
+    }
+
+    breakdowns.push({ tagName: tag.name, values: valueResults });
+  }
+
+  return breakdowns;
+}
+
+function computeFactorSummary(personData, dimCols, ratingFormat) {
+  const factorCounts = {};
+  const allRows = personData.flat();
+
+  for (const dim of dimCols) {
+    if (dim.factorCol === null) continue;
+    for (const row of allRows) {
+      const rating = row[dim.col];
+      if (!rating) continue;
+      const v = String(rating).trim();
+      if (v !== ratingFormat.bad && v !== ratingFormat.as_bad) continue;
+
+      const factorStr = row[dim.factorCol];
+      if (!factorStr || factorStr === '[]') continue;
+
+      try {
+        const factors = JSON.parse(factorStr);
+        for (const f of factors) {
+          if (!factorCounts[dim.name]) factorCounts[dim.name] = {};
+          factorCounts[dim.name][f] = (factorCounts[dim.name][f] || 0) + 1;
+        }
+      } catch (e) {}
+    }
+  }
+
+  return factorCounts;
+}
+
+function computePersonalSummary(personData, dimCols, ratingFormat, personNames, promptCount) {
+  const rows = [];
+  for (let i = 0; i < promptCount; i++) {
+    const row = { index: i + 1, personRatings: [] };
+
+    // Compute consensus for each dimension
+    row.consensus = dimCols.map(dim => {
+      const counts = { good: 0, as_good: 0, as_bad: 0, bad: 0 };
+      for (let p = 0; p < personData.length; p++) {
+        const val = personData[p][i] ? String(personData[p][i][dim.col] || '').trim() : '';
+        if (val === ratingFormat.good) counts.good++;
+        else if (val === ratingFormat.as_good) counts.as_good++;
+        else if (val === ratingFormat.as_bad) counts.as_bad++;
+        else if (val === ratingFormat.bad) counts.bad++;
+      }
+      const gsb = calcGSB(counts);
+      let label;
+      if (gsb > 1) label = ratingFormat.good;
+      else if (gsb < 1) label = ratingFormat.bad;
+      else label = ratingFormat.as_bad;
+      return { counts, gsb, label };
+    });
+
+    // Person ratings
+    for (let p = 0; p < personData.length; p++) {
+      const ratings = dimCols.map(dim => personData[p][i] ? String(personData[p][i][dim.col] || '') : '');
+      row.personRatings.push(ratings);
+    }
+
+    rows.push(row);
+  }
+  return rows;
+}
+
+// Rendering
+function renderResults() {
+  const tabsEl = document.getElementById('tabs');
+  tabsEl.style.display = 'flex';
+
+  const tabNames = ['汇总结果', '维度汇总'];
+  if (results.hasFactors) tabNames.push('二级维度汇总');
+  tabNames.push('个人数据汇总');
+
+  tabsEl.innerHTML = tabNames.map((name, i) =>
+    `<div class="tab ${i === 0 ? 'active' : ''}" data-tab="${i}">${name}</div>`
+  ).join('');
+
+  tabsEl.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabsEl.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      renderTab(parseInt(tab.dataset.tab), tabNames);
+    });
+  });
+
+  renderTab(0, tabNames);
+}
+
+function renderTab(idx, tabNames) {
+  const name = tabNames[idx];
+  const content = document.getElementById('sheetContent');
+
+  if (name === '汇总结果') renderSummaryTab(content);
+  else if (name === '维度汇总') renderDimensionTab(content);
+  else if (name === '二级维度汇总') renderFactorTab(content);
+  else if (name === '个人数据汇总') renderPersonalTab(content);
+}
+
+function renderSummaryTab(container) {
+  const { summary, dimCols } = results;
+  let html = '<div class="table-wrapper"><table>';
+
+  function renderBlock(block) {
+    html += `<tr><td class="section-header" colspan="11">${block.name}</td></tr>`;
+    html += `<tr><th>能力类型</th><th>B(Bad)数</th><th>As good数</th><th>As bad数</th><th>G(Good)数</th><th>B占比</th><th>As good占比</th><th>As bad占比</th><th>G占比</th><th>Similar占比</th><th>GSB</th></tr>`;
+    for (const dim of block.dims) {
+      const sim = dim.ratios.as_good + dim.ratios.as_bad;
+      const gsbClass = dim.gsb > 1 ? 'good' : dim.gsb < 1 ? 'bad' : '';
+      html += `<tr>
+        <td class="label">${dim.name}</td>
+        <td>${dim.counts.bad}</td><td>${dim.counts.as_good}</td><td>${dim.counts.as_bad}</td><td>${dim.counts.good}</td>
+        <td>${(dim.ratios.bad * 100).toFixed(1)}%</td><td>${(dim.ratios.as_good * 100).toFixed(1)}%</td>
+        <td>${(dim.ratios.as_bad * 100).toFixed(1)}%</td><td>${(dim.ratios.good * 100).toFixed(1)}%</td>
+        <td>${(sim * 100).toFixed(1)}%</td><td class="${gsbClass}">${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)}</td>
+      </tr>`;
+    }
+  }
+
+  renderBlock(summary.total);
+  for (const person of summary.persons) renderBlock(person);
+
+  html += '</table></div>';
+  container.innerHTML = html;
+}
+
+function renderDimensionTab(container) {
+  const { dimensionBreakdown } = results;
+  let html = '<div class="table-wrapper">';
+
+  for (const breakdown of dimensionBreakdown) {
+    html += `<h3 style="margin:16px 0 8px;font-size:15px;">${breakdown.tagName}</h3><table>`;
+    html += `<tr><th>标签值</th><th>样本数</th><th>能力类型</th><th>B占比</th><th>As good占比</th><th>As bad占比</th><th>G占比</th><th>Similar占比</th><th>GSB</th></tr>`;
+
+    for (const val of breakdown.values) {
+      const firstDim = true;
+      for (let di = 0; di < val.dims.length; di++) {
+        const dim = val.dims[di];
+        const sim = dim.ratios.as_good + dim.ratios.as_bad;
+        const gsbClass = dim.gsb > 1 ? 'good' : dim.gsb < 1 ? 'bad' : '';
+        html += `<tr>
+          ${di === 0 ? `<td class="label" rowspan="${val.dims.length}">${val.value}</td><td rowspan="${val.dims.length}">${val.matchedCount}</td>` : ''}
+          <td class="label">${dim.name}</td>
+          <td>${(dim.ratios.bad * 100).toFixed(1)}%</td><td>${(dim.ratios.as_good * 100).toFixed(1)}%</td>
+          <td>${(dim.ratios.as_bad * 100).toFixed(1)}%</td><td>${(dim.ratios.good * 100).toFixed(1)}%</td>
+          <td>${(sim * 100).toFixed(1)}%</td><td class="${gsbClass}">${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)}</td>
+        </tr>`;
+      }
+    }
+    html += '</table>';
+  }
+
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+function renderFactorTab(container) {
+  if (!results.factorSummary) { container.innerHTML = '<div class="empty-state"><p>当前场景无二级维度汇总</p></div>'; return; }
+
+  let html = '<div class="table-wrapper"><table>';
+  html += '<tr><th>一级分类</th><th>二级分类（影响因素）</th><th>出现次数</th></tr>';
+
+  for (const [dimName, factors] of Object.entries(results.factorSummary)) {
+    const sorted = Object.entries(factors).sort((a, b) => b[1] - a[1]);
+    for (let i = 0; i < sorted.length; i++) {
+      html += `<tr>
+        ${i === 0 ? `<td class="label" rowspan="${sorted.length}">${dimName}</td>` : ''}
+        <td class="label">${sorted[i][0]}</td><td>${sorted[i][1]}</td>
+      </tr>`;
+    }
+  }
+
+  html += '</table></div>';
+  container.innerHTML = html;
+}
+
+function renderPersonalTab(container) {
+  const { personalSummary, dimCols, personNames, ratingFormat } = results;
+  const maxRows = Math.min(personalSummary.length, 100); // limit for performance
+
+  let html = '<div class="table-wrapper"><table>';
+  html += '<tr><th>序号</th>';
+  for (const dim of dimCols) html += `<th>综合-${dim.name.slice(0,4)}</th>`;
+  for (const pn of personNames) {
+    for (const dim of dimCols) html += `<th>${pn.slice(0,3)}-${dim.name.slice(0,3)}</th>`;
+  }
+  html += '</tr>';
+
+  for (let i = 0; i < maxRows; i++) {
+    const row = personalSummary[i];
+    html += `<tr><td>${row.index}</td>`;
+    for (const c of row.consensus) {
+      const cls = c.label === ratingFormat.good ? 'good' : c.label === ratingFormat.bad ? 'bad' : '';
+      html += `<td class="${cls}">${c.label}</td>`;
+    }
+    for (const pr of row.personRatings) {
+      for (const r of pr) {
+        const cls = r === ratingFormat.good ? 'good' : r === ratingFormat.bad ? 'bad' : '';
+        html += `<td class="${cls}">${r}</td>`;
+      }
+    }
+    html += '</tr>';
+  }
+
+  if (personalSummary.length > maxRows) {
+    html += `<tr><td colspan="100" style="text-align:center;color:#999;">... 仅显示前 ${maxRows} 条，完整数据请导出 Excel ...</td></tr>`;
+  }
+
+  html += '</table></div>';
+  container.innerHTML = html;
+}
+
+// Export
+document.getElementById('exportBtn').addEventListener('click', exportExcel);
+
+function exportExcel() {
+  if (!results) return;
+  const wb = XLSX.utils.book_new();
+
+  // Sheet 1: 汇总结果
+  const summaryData = [];
+  function addBlock(block) {
+    summaryData.push([block.name]);
+    summaryData.push(['能力类型', 'B(Bad)数', 'As good数', 'As bad数', 'G(Good)数', 'B占比', 'As good占比', 'As bad占比', 'G占比', 'Similar占比', 'GSB']);
+    for (const dim of block.dims) {
+      const sim = dim.ratios.as_good + dim.ratios.as_bad;
+      summaryData.push([dim.name, dim.counts.bad, dim.counts.as_good, dim.counts.as_bad, dim.counts.good,
+        dim.ratios.bad, dim.ratios.as_good, dim.ratios.as_bad, dim.ratios.good, sim, dim.gsb === Infinity ? '∞' : dim.gsb]);
+    }
+    summaryData.push([]);
+  }
+  addBlock(results.summary.total);
+  for (const p of results.summary.persons) addBlock(p);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryData), '汇总结果');
+
+  // Sheet 2: 维度汇总
+  const dimData = [];
+  for (const bd of results.dimensionBreakdown) {
+    dimData.push([bd.tagName]);
+    dimData.push(['标签值', '样本数', '能力类型', 'B占比', 'As good占比', 'As bad占比', 'G占比', 'Similar占比', 'GSB']);
+    for (const val of bd.values) {
+      for (let di = 0; di < val.dims.length; di++) {
+        const dim = val.dims[di];
+        const sim = dim.ratios.as_good + dim.ratios.as_bad;
+        dimData.push([di === 0 ? val.value : '', di === 0 ? val.matchedCount : '', dim.name,
+          dim.ratios.bad, dim.ratios.as_good, dim.ratios.as_bad, dim.ratios.good, sim, dim.gsb === Infinity ? '∞' : dim.gsb]);
+      }
+    }
+    dimData.push([]);
+  }
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dimData), '维度汇总');
+
+  // Sheet 3: 二级维度汇总 (if applicable)
+  if (results.hasFactors && results.factorSummary) {
+    const factorData = [['一级分类', '二级分类', '出现次数']];
+    for (const [dimName, factors] of Object.entries(results.factorSummary)) {
+      const sorted = Object.entries(factors).sort((a, b) => b[1] - a[1]);
+      for (const [f, count] of sorted) {
+        factorData.push([dimName, f, count]);
+      }
+    }
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(factorData), '二级维度汇总');
+  }
+
+  // Sheet 4: 个人数据汇总
+  const { personalSummary, dimCols, personNames, ratingFormat } = results;
+  const personalData = [];
+  const header = ['序号'];
+  for (const dim of dimCols) header.push(`综合-${dim.name}`);
+  for (const pn of personNames) { for (const dim of dimCols) header.push(`${pn}-${dim.name}`); }
+  personalData.push(header);
+
+  for (const row of personalSummary) {
+    const r = [row.index];
+    for (const c of row.consensus) r.push(c.label);
+    for (const pr of row.personRatings) { for (const rating of pr) r.push(rating); }
+    personalData.push(r);
+  }
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(personalData), '个人数据汇总');
+
+  XLSX.writeFile(wb, `评测汇总结果_${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+</script>
+</body>
+</html>
