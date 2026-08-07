@@ -1002,6 +1002,24 @@ function exportExcel() {
   if (!results) return;
   const wb = XLSX.utils.book_new();
 
+  // Helper: create sheet from data and apply formulas
+  function createSheetWithFormulas(data) {
+    // Separate formulas from values
+    const values = data.map(row => row.map(cell => cell && cell.f ? '' : cell));
+    const ws = XLSX.utils.aoa_to_sheet(values);
+    // Apply formulas
+    for (let r = 0; r < data.length; r++) {
+      for (let c = 0; c < data[r].length; c++) {
+        const cell = data[r][c];
+        if (cell && cell.f) {
+          const addr = XLSX.utils.encode_cell({ r, c });
+          ws[addr] = { t: 'n', f: cell.f };
+        }
+      }
+    }
+    return ws;
+  }
+
   // Sheet 1: 汇总结果 (with formulas)
   const summaryData = [];
   let row = 0;
@@ -1032,9 +1050,7 @@ function exportExcel() {
   }
   addBlock(results.summary.total);
   for (const p of results.summary.persons) addBlock(p);
-
-  const ws1 = XLSX.utils.aoa_to_sheet(summaryData);
-  XLSX.utils.book_append_sheet(wb, ws1, '汇总结果');
+  XLSX.utils.book_append_sheet(wb, createSheetWithFormulas(summaryData), '汇总结果');
 
   // Sheet 2: 维度汇总 (with formulas)
   const dimData = [];
@@ -1064,9 +1080,9 @@ function exportExcel() {
     dimData.push([]);
     dRow++;
   }
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dimData), '维度汇总');
+  XLSX.utils.book_append_sheet(wb, createSheetWithFormulas(dimData), '维度汇总');
 
-  // Sheet 3: 二级维度汇总 (with formula for 合计)
+  // Sheet 3: 二级维度汇总
   if (results.hasFactors && results.factorSummary) {
     const factorData = [['一级分类', '二级分类', 'Good方向次数', 'Bad方向次数', '合计']];
     let fRow = 1;
@@ -1077,7 +1093,7 @@ function exportExcel() {
         factorData.push([dimName, f, counts.good, counts.bad, { f: `C${fRow}+D${fRow}` }]);
       }
     }
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(factorData), '二级维度汇总');
+    XLSX.utils.book_append_sheet(wb, createSheetWithFormulas(factorData), '二级维度汇总');
   }
 
   // Sheet 4: 个人数据汇总
