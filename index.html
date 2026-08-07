@@ -1002,46 +1002,79 @@ function exportExcel() {
   if (!results) return;
   const wb = XLSX.utils.book_new();
 
-  // Sheet 1: 汇总结果
+  // Sheet 1: 汇总结果 (with formulas)
   const summaryData = [];
+  let row = 0;
   function addBlock(block) {
     summaryData.push([block.name]);
+    row++;
     summaryData.push(['能力类型', 'B(Bad)数', 'As good数', 'As bad数', 'G(Good)数', 'B占比', 'As good占比', 'As bad占比', 'G占比', 'Similar占比', 'GSB']);
+    row++;
     for (const dim of block.dims) {
-      const sim = dim.ratios.as_good + dim.ratios.as_bad;
-      summaryData.push([dim.name, dim.counts.bad, dim.counts.as_good, dim.counts.as_bad, dim.counts.good,
-        dim.ratios.bad, dim.ratios.as_good, dim.ratios.as_bad, dim.ratios.good, sim, dim.gsb === Infinity ? '∞' : dim.gsb]);
+      const r = row + 1; // 1-indexed for Excel
+      summaryData.push([
+        dim.name,
+        dim.counts.bad,
+        dim.counts.as_good,
+        dim.counts.as_bad,
+        dim.counts.good,
+        { f: `B${r}/(B${r}+C${r}+D${r}+E${r})` },
+        { f: `C${r}/(B${r}+C${r}+D${r}+E${r})` },
+        { f: `D${r}/(B${r}+C${r}+D${r}+E${r})` },
+        { f: `E${r}/(B${r}+C${r}+D${r}+E${r})` },
+        { f: `G${r}+H${r}` },
+        { f: `(I${r}+0.5*J${r})/(F${r}+0.5*J${r})` }
+      ]);
+      row++;
     }
     summaryData.push([]);
+    row++;
   }
   addBlock(results.summary.total);
   for (const p of results.summary.persons) addBlock(p);
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryData), '汇总结果');
 
-  // Sheet 2: 维度汇总
+  const ws1 = XLSX.utils.aoa_to_sheet(summaryData);
+  XLSX.utils.book_append_sheet(wb, ws1, '汇总结果');
+
+  // Sheet 2: 维度汇总 (with formulas)
   const dimData = [];
+  let dRow = 0;
   for (const bd of results.dimensionBreakdown) {
     dimData.push([bd.tagName]);
-    dimData.push(['标签值', '样本数', '能力类型', 'B占比', 'As good占比', 'As bad占比', 'G占比', 'Similar占比', 'GSB']);
+    dRow++;
+    dimData.push(['标签值', '样本数', '能力类型', 'B(Bad)数', 'As good数', 'As bad数', 'G(Good)数', 'B占比', 'As good占比', 'As bad占比', 'G占比', 'Similar占比', 'GSB']);
+    dRow++;
     for (const val of bd.values) {
       for (let di = 0; di < val.dims.length; di++) {
         const dim = val.dims[di];
-        const sim = dim.ratios.as_good + dim.ratios.as_bad;
-        dimData.push([di === 0 ? val.value : '', di === 0 ? val.matchedCount : '', dim.name,
-          dim.ratios.bad, dim.ratios.as_good, dim.ratios.as_bad, dim.ratios.good, sim, dim.gsb === Infinity ? '∞' : dim.gsb]);
+        const r = dRow + 1;
+        dimData.push([
+          di === 0 ? val.value : '', di === 0 ? val.matchedCount : '', dim.name,
+          dim.counts.bad, dim.counts.as_good, dim.counts.as_bad, dim.counts.good,
+          { f: `IF(D${r}+E${r}+F${r}+G${r}=0,"",D${r}/(D${r}+E${r}+F${r}+G${r}))` },
+          { f: `IF(D${r}+E${r}+F${r}+G${r}=0,"",E${r}/(D${r}+E${r}+F${r}+G${r}))` },
+          { f: `IF(D${r}+E${r}+F${r}+G${r}=0,"",F${r}/(D${r}+E${r}+F${r}+G${r}))` },
+          { f: `IF(D${r}+E${r}+F${r}+G${r}=0,"",G${r}/(D${r}+E${r}+F${r}+G${r}))` },
+          { f: `IF(D${r}+E${r}+F${r}+G${r}=0,"",I${r}+J${r})` },
+          { f: `IF(D${r}+E${r}+F${r}+G${r}=0,"",(K${r}+0.5*L${r})/(H${r}+0.5*L${r}))` }
+        ]);
+        dRow++;
       }
     }
     dimData.push([]);
+    dRow++;
   }
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dimData), '维度汇总');
 
-  // Sheet 3: 二级维度汇总 (if applicable)
+  // Sheet 3: 二级维度汇总 (with formula for 合计)
   if (results.hasFactors && results.factorSummary) {
     const factorData = [['一级分类', '二级分类', 'Good方向次数', 'Bad方向次数', '合计']];
+    let fRow = 1;
     for (const [dimName, factors] of Object.entries(results.factorSummary)) {
       const sorted = Object.entries(factors).sort((a, b) => (b[1].good + b[1].bad) - (a[1].good + a[1].bad));
       for (const [f, counts] of sorted) {
-        factorData.push([dimName, f, counts.good, counts.bad, counts.good + counts.bad]);
+        fRow++;
+        factorData.push([dimName, f, counts.good, counts.bad, { f: `C${fRow}+D${fRow}` }]);
       }
     }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(factorData), '二级维度汇总');
@@ -1050,15 +1083,15 @@ function exportExcel() {
   // Sheet 4: 个人数据汇总
   const { personalSummary, dimCols, personNames, ratingFormat } = results;
   const personalData = [];
-  const header = ['序号'];
-  for (const dim of dimCols) header.push(`综合-${dim.name}`);
-  for (const pn of personNames) { for (const dim of dimCols) header.push(`${pn}-${dim.name}`); }
-  personalData.push(header);
+  const pHeader = ['序号'];
+  for (const dim of dimCols) pHeader.push(`综合-${dim.name}`);
+  for (const pn of personNames) { for (const dim of dimCols) pHeader.push(`${pn}-${dim.name}`); }
+  personalData.push(pHeader);
 
-  for (const row of personalSummary) {
-    const r = [row.index];
-    for (const c of row.consensus) r.push(c.label);
-    for (const pr of row.personRatings) { for (const rating of pr) r.push(rating); }
+  for (const pRow of personalSummary) {
+    const r = [pRow.index];
+    for (const c of pRow.consensus) r.push(c.label);
+    for (const pr of pRow.personRatings) { for (const rating of pr) r.push(rating); }
     personalData.push(r);
   }
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(personalData), '个人数据汇总');
