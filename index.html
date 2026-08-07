@@ -695,10 +695,17 @@ function generateResults(personData, personNames, dimCols, tagCols, ratingFormat
 
   const promptMeta = [];
   for (let i = 0; i < promptCount; i++) {
-    const row = personData[0][i];
+    // Find first non-null person for this prompt to extract metadata
+    let row = null;
+    for (let p = 0; p < personData.length; p++) {
+      if (personData[p][i]) { row = personData[p][i]; break; }
+    }
     promptMeta.push({
       index: i + 1,
-      prompt: row[promptCol] || '',
+      prompt: row ? (row[promptCol] || '') : '',
+      modelAUrl: row && modelACol >= 0 ? (row[modelACol] || '') : '',
+      modelBUrl: row && modelBCol >= 0 ? (row[modelBCol] || '') : ''
+    });
       modelAUrl: modelACol >= 0 ? (row[modelACol] || '') : '',
       modelBUrl: modelBCol >= 0 ? (row[modelBCol] || '') : ''
     });
@@ -880,7 +887,7 @@ function computeSummary(personData, dimCols, ratingFormat, promptCount, personNa
 }
 
 function computeDimensionBreakdown(personData, dimCols, tagCols, ratingFormat, headers, configTags) {
-  const allRows = personData.flat();
+  const allRows = personData.flat().filter(Boolean);
   const breakdowns = [];
 
   for (let ti = 0; ti < tagCols.length; ti++) {
@@ -938,7 +945,7 @@ function computeDimensionBreakdown(personData, dimCols, tagCols, ratingFormat, h
 
 function computeFactorSummary(personData, dimCols, ratingFormat, secondaryDims) {
   const factorCounts = {};
-  const allRows = personData.flat();
+  const allRows = personData.flat().filter(Boolean);
 
   // Initialize with configured secondary dims (so missing ones show as 0)
   if (secondaryDims) {
@@ -1731,14 +1738,73 @@ document.getElementById('qcBtn').addEventListener('click', runQCAnalysis);
 function buildQCData() {
   const { summary, personalSummary, dimCols, personNames, ratingFormat, promptCount, personCount, scene } = results;
 
+  // Detect paired mode: names contain '/'
+  const isPaired = personNames.some(n => n.includes('/'));
+
+  // For QC, split paired names into individual evaluators
+  let qcPersonNames = personNames;
+  let qcPersonData = summary.persons;
+  if (isPaired) {
+    qcPersonNames = [];
+    qcPersonData = [];
+    for (let p = 0; p < personNames.length; p++) {
+      const parts = personNames[p].split('/');
+      if (parts.length === 2 && parts[0] && parts[1]) {
+        // Split the paired person's data by first/second half of prompts
+        const halfCount = Math.floor(promptCount / 2);
+        const person = summary.persons[p];
+        // Person 1: first half of prompts
+        const p1Ratings = personalSummary.slice(0, halfCount).map(r => r.personRatings[p]);
+        const p2Ratings = personalSummary.slice(halfCount).map(r => r.personRatings[p]);
+
+        // Compute individual stats from their respective prompt ranges
+        for (let split = 0; split < 2; split++) {
+          const name = parts[split].trim();
+          qcPersonNames.push(name);
+          const ratings = split === 0 ? p1Ratings : p2Ratings;
+          const dimResults = dimCols.map((dim, di) => {
+            const counts = { good: 0, as_good: 0, as_bad: 0, bad: 0 };
+            for (const r of ratings) {
+              const v = r[di];
+              if (!v) continue;
+              const s = String(v).trim();
+              if (s === ratingFormat.good) counts.good++;
+              else if (s === ratingFormat.as_good) counts.as_good++;
+              else if (s === ratingFormat.as_bad) counts.as_bad++;
+              else if (s === ratingFormat.bad) counts.bad++;
+            }
+            const total = counts.good + counts.as_good + counts.as_bad + counts.bad;
+            return {
+              name: dim.name,
+              counts,
+              total,
+              ratios: {
+                good: total ? counts.good / total : 0,
+                as_good: total ? counts.as_good / total : 0,
+                as_bad: total ? counts.as_bad / total : 0,
+                bad: total ? counts.bad / total : 0
+              },
+              gsb: total ? ((counts.good + 0.5 * (counts.as_good + counts.as_bad)) / (counts.bad + 0.5 * (counts.as_good + counts.as_bad))) : 1
+            };
+          });
+          qcPersonData.push({ name, dims: dimResults });
+        }
+      } else {
+        qcPersonNames.push(personNames[p]);
+        qcPersonData.push(summary.persons[p]);
+      }
+    }
+  }
+
+  const qcPersonCount = qcPersonNames.length;
+
   let text = `## 评测质检数据\n\n`;
-  text += `- 场景: ${scene.toUpperCase()}\n- 评测人数: ${personCount}\n- Prompt 总数: ${promptCount}\n- 一级维度: ${dimCols.map(d => d.name).join('、')}\n\n`;
+  text += `- 场景: ${scene.toUpperCase()}\n- 评测人数: ${qcPersonCount}${isPaired ? '（已将配对组拆分为单人）' : ''}\n- Prompt 总数: ${promptCount}\n- 一级维度: ${dimCols.map(d => d.name).join('、')}\n\n`;
 
   // Per-person rating distribution
   text += `## 一、各评测人打分分布\n\n| 评测人 | 维度 | G(Good) | As good | As bad | B(Bad) | G占比 | B占比 | 个人GSB |\n|---|---|---|---|---|---|---|---|---|\n`;
-  for (const person of summary.persons) {
+  for (const person of qcPersonData) {
     for (const dim of person.dims) {
-      const total = dim.counts.good + dim.counts.as_good + dim.counts.as_bad + dim.counts.bad;
       text += `| ${person.name} | ${dim.name} | ${dim.counts.good} | ${dim.counts.as_good} | ${dim.counts.as_bad} | ${dim.counts.bad} | ${(dim.ratios.good*100).toFixed(1)}% | ${(dim.ratios.bad*100).toFixed(1)}% | ${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)} |\n`;
     }
   }
@@ -1751,7 +1817,7 @@ function buildQCData() {
 
   // Per-person deviation from group
   text += `\n## 三、各评测人 GSB 与全组平均的偏差\n\n| 评测人 | 维度 | 个人GSB | 全组GSB | 偏差 | 方向是否反转 |\n|---|---|---|---|---|---|\n`;
-  for (const person of summary.persons) {
+  for (const person of qcPersonData) {
     for (let di = 0; di < person.dims.length; di++) {
       const pGsb = person.dims[di].gsb;
       const gGsb = summary.total.dims[di].gsb;
@@ -1764,15 +1830,47 @@ function buildQCData() {
 
   // All-same detection (all dimensions same vote per prompt)
   text += `\n## 四、四维度全同检测（每题所有维度打分完全一样的比例）\n\n| 评测人 | 全同题数 | 全同率 | 是否异常(≥25%) |\n|---|---|---|---|\n`;
-  // Recompute from personalSummary
-  for (let p = 0; p < personNames.length; p++) {
-    let allSameCount = 0;
-    for (let i = 0; i < personalSummary.length; i++) {
-      const ratings = personalSummary[i].personRatings[p];
-      if (ratings.length > 1 && ratings.every(r => r === ratings[0])) allSameCount++;
+  if (isPaired) {
+    // For split persons, recalculate from their respective halves
+    const halfCount = Math.floor(promptCount / 2);
+    let qcIdx = 0;
+    for (let p = 0; p < personNames.length; p++) {
+      if (personNames[p].includes('/')) {
+        for (let split = 0; split < 2; split++) {
+          const start = split === 0 ? 0 : halfCount;
+          const end = split === 0 ? halfCount : personalSummary.length;
+          let allSameCount = 0;
+          for (let i = start; i < end; i++) {
+            const ratings = personalSummary[i].personRatings[p];
+            const nonEmpty = ratings.filter(r => r && r.trim());
+            if (nonEmpty.length > 1 && nonEmpty.every(r => r === nonEmpty[0])) allSameCount++;
+          }
+          const total = end - start;
+          const rate = total > 0 ? allSameCount / total : 0;
+          text += `| ${qcPersonNames[qcIdx]} | ${allSameCount} | ${(rate*100).toFixed(1)}% | ${rate >= 0.25 ? '⚠️ 异常' : '正常'} |\n`;
+          qcIdx++;
+        }
+      } else {
+        let allSameCount = 0;
+        for (let i = 0; i < personalSummary.length; i++) {
+          const ratings = personalSummary[i].personRatings[p];
+          if (ratings.length > 1 && ratings.every(r => r === ratings[0])) allSameCount++;
+        }
+        const rate = allSameCount / promptCount;
+        text += `| ${qcPersonNames[qcIdx]} | ${allSameCount} | ${(rate*100).toFixed(1)}% | ${rate >= 0.25 ? '⚠️ 异常' : '正常'} |\n`;
+        qcIdx++;
+      }
     }
-    const rate = allSameCount / promptCount;
-    text += `| ${personNames[p]} | ${allSameCount} | ${(rate*100).toFixed(1)}% | ${rate >= 0.25 ? '⚠️ 异常' : '正常'} |\n`;
+  } else {
+    for (let p = 0; p < personNames.length; p++) {
+      let allSameCount = 0;
+      for (let i = 0; i < personalSummary.length; i++) {
+        const ratings = personalSummary[i].personRatings[p];
+        if (ratings.length > 1 && ratings.every(r => r === ratings[0])) allSameCount++;
+      }
+      const rate = allSameCount / promptCount;
+      text += `| ${personNames[p]} | ${allSameCount} | ${(rate*100).toFixed(1)}% | ${rate >= 0.25 ? '⚠️ 异常' : '正常'} |\n`;
+    }
   }
 
   // Cross-person agreement per prompt (majority vote)
@@ -1780,24 +1878,67 @@ function buildQCData() {
   text += `对每条 prompt 的综合评价维度，取多数投票结果为"共识"。统计每人偏离共识的次数。\n\n`;
   text += `| 评测人 | 偏离次数 | 偏离率 | 严重偏离(方向反转) |\n|---|---|---|---|\n`;
 
-  const lastDimIdx = dimCols.length - 1; // 综合评价 is last
-  for (let p = 0; p < personNames.length; p++) {
-    let devCount = 0, severeCount = 0;
-    for (let i = 0; i < personalSummary.length; i++) {
-      const myRating = personalSummary[i].personRatings[p][lastDimIdx];
-      const consensus = personalSummary[i].consensus[lastDimIdx];
-      if (!myRating) continue;
-      const myDir = (myRating === ratingFormat.good || myRating === ratingFormat.as_bad) ? 'A' : 'B';
-      const consDir = consensus.gsb >= 1 ? 'A' : 'B';
-      if (myDir !== consDir) {
-        devCount++;
-        if ((myRating === ratingFormat.good && consensus.gsb < 0.7) ||
-            (myRating === ratingFormat.bad && consensus.gsb > 1.5)) {
-          severeCount++;
+  const lastDimIdx = dimCols.length - 1;
+  if (isPaired) {
+    const halfCount = Math.floor(promptCount / 2);
+    let qcIdx = 0;
+    for (let p = 0; p < personNames.length; p++) {
+      if (personNames[p].includes('/')) {
+        for (let split = 0; split < 2; split++) {
+          const start = split === 0 ? 0 : halfCount;
+          const end = split === 0 ? halfCount : personalSummary.length;
+          let devCount = 0, severeCount = 0;
+          for (let i = start; i < end; i++) {
+            const myRating = personalSummary[i].personRatings[p][lastDimIdx];
+            const consensus = personalSummary[i].consensus[lastDimIdx];
+            if (!myRating) continue;
+            const myDir = (myRating === ratingFormat.good || myRating === ratingFormat.as_bad) ? 'A' : 'B';
+            const consDir = consensus.gsb >= 1 ? 'A' : 'B';
+            if (myDir !== consDir) {
+              devCount++;
+              if ((myRating === ratingFormat.good && consensus.gsb < 0.7) ||
+                  (myRating === ratingFormat.bad && consensus.gsb > 1.5)) severeCount++;
+            }
+          }
+          const total = end - start;
+          text += `| ${qcPersonNames[qcIdx]} | ${devCount} | ${(total > 0 ? devCount/total*100 : 0).toFixed(1)}% | ${severeCount} |\n`;
+          qcIdx++;
         }
+      } else {
+        let devCount = 0, severeCount = 0;
+        for (let i = 0; i < personalSummary.length; i++) {
+          const myRating = personalSummary[i].personRatings[p][lastDimIdx];
+          const consensus = personalSummary[i].consensus[lastDimIdx];
+          if (!myRating) continue;
+          const myDir = (myRating === ratingFormat.good || myRating === ratingFormat.as_bad) ? 'A' : 'B';
+          const consDir = consensus.gsb >= 1 ? 'A' : 'B';
+          if (myDir !== consDir) {
+            devCount++;
+            if ((myRating === ratingFormat.good && consensus.gsb < 0.7) ||
+                (myRating === ratingFormat.bad && consensus.gsb > 1.5)) severeCount++;
+          }
+        }
+        text += `| ${qcPersonNames[qcIdx]} | ${devCount} | ${(devCount/promptCount*100).toFixed(1)}% | ${severeCount} |\n`;
+        qcIdx++;
       }
     }
-    text += `| ${personNames[p]} | ${devCount} | ${(devCount/promptCount*100).toFixed(1)}% | ${severeCount} |\n`;
+  } else {
+    for (let p = 0; p < personNames.length; p++) {
+      let devCount = 0, severeCount = 0;
+      for (let i = 0; i < personalSummary.length; i++) {
+        const myRating = personalSummary[i].personRatings[p][lastDimIdx];
+        const consensus = personalSummary[i].consensus[lastDimIdx];
+        if (!myRating) continue;
+        const myDir = (myRating === ratingFormat.good || myRating === ratingFormat.as_bad) ? 'A' : 'B';
+        const consDir = consensus.gsb >= 1 ? 'A' : 'B';
+        if (myDir !== consDir) {
+          devCount++;
+          if ((myRating === ratingFormat.good && consensus.gsb < 0.7) ||
+              (myRating === ratingFormat.bad && consensus.gsb > 1.5)) severeCount++;
+        }
+      }
+      text += `| ${personNames[p]} | ${devCount} | ${(devCount/promptCount*100).toFixed(1)}% | ${severeCount} |\n`;
+    }
   }
 
   return text;
