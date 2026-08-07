@@ -841,28 +841,6 @@ async function runAIAnalysis() {
   aiBtn.disabled = true;
   aiBtn.textContent = '分析中...';
 
-  // Switch to AI tab
-  const tabsEl = document.getElementById('tabs');
-  const tabNames = getTabNames();
-  if (!tabNames.includes('AI 分析报告')) {
-    tabNames.push('AI 分析报告');
-    tabsEl.innerHTML = tabNames.map((name, i) =>
-      `<div class="tab ${i === tabNames.length - 1 ? 'active' : ''}" data-tab="${i}">${name}</div>`
-    ).join('');
-    tabsEl.querySelectorAll('.tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        tabsEl.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        renderTab(parseInt(tab.dataset.tab), tabNames);
-      });
-    });
-  } else {
-    tabsEl.querySelectorAll('.tab').forEach(t => {
-      t.classList.remove('active');
-      if (t.textContent === 'AI 分析报告') t.classList.add('active');
-    });
-  }
-
   const content = document.getElementById('sheetContent');
   content.innerHTML = '<div class="ai-loading"><span class="spinner"></span>正在调用 AI 生成分析报告，请稍候...</div>';
 
@@ -915,6 +893,7 @@ GSB > 1 我方优，< 1 竞品优
     const reportText = data.content[0].text;
 
     results.aiReport = reportText;
+    rebuildTabs('AI 分析报告');
     renderAIReport(content, reportText);
     showStatus('success', 'AI 分析报告生成完成');
   } catch (err) {
@@ -964,10 +943,27 @@ function renderAIReport(container, markdown) {
   container.innerHTML = `<div class="ai-report">${html}</div>`;
 }
 
+function rebuildTabs(activeTabName) {
+  const tabsEl = document.getElementById('tabs');
+  const tabNames = getTabNames();
+  tabsEl.innerHTML = tabNames.map((name, i) =>
+    `<div class="tab ${name === activeTabName ? 'active' : ''}" data-tab="${i}">${name}</div>`
+  ).join('');
+  tabsEl.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabsEl.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      renderTab(parseInt(tab.dataset.tab), tabNames);
+    });
+  });
+}
+
 function getTabNames() {
   const names = ['汇总结果', '维度汇总'];
   if (results.hasFactors) names.push('二级维度汇总');
   names.push('个人数据汇总');
+  if (results.aiReport) names.push('AI 分析报告');
+  if (results.qcReport) names.push('人员质检');
   return names;
 }
 
@@ -1061,20 +1057,6 @@ async function runQCAnalysis() {
   qcBtn.disabled = true;
   qcBtn.textContent = '质检中...';
 
-  const tabsEl = document.getElementById('tabs');
-  let tabNames = getTabNames();
-  if (!tabNames.includes('人员质检')) tabNames.push('人员质检');
-  tabsEl.innerHTML = tabNames.map((name, i) =>
-    `<div class="tab ${i === tabNames.length - 1 ? 'active' : ''}" data-tab="${i}">${name}</div>`
-  ).join('');
-  tabsEl.querySelectorAll('.tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      tabsEl.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      renderTab(parseInt(tab.dataset.tab), tabNames);
-    });
-  });
-
   const content = document.getElementById('sheetContent');
   content.innerHTML = '<div class="ai-loading"><span class="spinner"></span>正在进行评测人员质检分析...</div>';
 
@@ -1130,6 +1112,7 @@ GSB体系：
     const data = await response.json();
     const reportText = data.content[0].text;
     results.qcReport = reportText;
+    rebuildTabs('人员质检');
     renderAIReport(content, reportText);
     showStatus('success', '评测人员质检报告生成完成');
   } catch (err) {
