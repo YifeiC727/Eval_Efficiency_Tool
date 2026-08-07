@@ -737,8 +737,11 @@ function findDimensionColumns(headers, knownDims) {
     const idx = headers.indexOf(dim);
     if (idx >= 0) {
       let factorCol = null;
-      if (idx + 1 < headers.length && headers[idx + 1] == null) {
-        factorCol = idx + 1;
+      if (idx + 1 < headers.length) {
+        const nextHeader = headers[idx + 1];
+        if (nextHeader == null || (typeof nextHeader === 'string' && nextHeader.includes('影响因素'))) {
+          factorCol = idx + 1;
+        }
       }
       dims.push({ name: dim, col: idx, factorCol });
     }
