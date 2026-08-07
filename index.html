@@ -636,12 +636,13 @@ function processData() {
   }
   if (promptCount === 0) promptCount = dataRows.length;
 
-  // Split into segments by detecting seq resets
+  // Split into segments by detecting seq resets or jumps backward
   const personData = [];
   let segStart = 0;
   for (let i = 1; i < dataRows.length; i++) {
     const seq = parseInt(dataRows[i][seqCol]);
-    if (seq === 1 && parseInt(dataRows[i-1][seqCol]) > 1) {
+    const prevSeq = parseInt(dataRows[i-1][seqCol]);
+    if (seq <= prevSeq && (prevSeq - seq) > 1) {
       personData.push(dataRows.slice(segStart, i));
       segStart = i;
     }
@@ -786,7 +787,7 @@ function parsePersonInfo(sheet, personCount, groupMode) {
       if (data[i][nameCol2] && String(data[i][nameCol2]).trim()) rightCount++;
     }
   }
-  const isPaired = hasTwoNameCols && leftCount > 0 && leftCount === rightCount;
+  const isPaired = hasTwoNameCols && leftCount > 0 && rightCount > 0;
 
   if (groupMode === 'paired' || (groupMode === 'auto' && isPaired)) {
     for (let i = 1; i < data.length && names.length < personCount; i++) {
