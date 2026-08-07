@@ -142,6 +142,7 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
   <div class="actions">
     <button class="btn" id="processBtn" disabled>开始计算</button>
     <button class="btn btn-ai" id="aiBtn" disabled>AI 生成分析报告</button>
+    <button class="btn btn-ai" id="qcBtn" disabled style="background:#e65100;">AI 评测人员质检</button>
     <button class="btn btn-export" id="exportBtn" disabled>导出 Excel</button>
   </div>
 
@@ -573,6 +574,7 @@ function renderResults() {
 
   renderTab(0, tabNames);
   document.getElementById('aiBtn').disabled = false;
+  document.getElementById('qcBtn').disabled = false;
 }
 
 function renderTab(idx, tabNames) {
@@ -586,6 +588,10 @@ function renderTab(idx, tabNames) {
   else if (name === 'AI 分析报告') {
     if (results.aiReport) renderAIReport(content, results.aiReport);
     else content.innerHTML = '<div class="empty-state"><p>点击"AI 生成分析报告"按钮开始</p></div>';
+  }
+  else if (name === '人员质检') {
+    if (results.qcReport) renderAIReport(content, results.qcReport);
+    else content.innerHTML = '<div class="empty-state"><p>点击"AI 评测人员质检"按钮开始</p></div>';
   }
 }
 
@@ -963,6 +969,176 @@ function getTabNames() {
   if (results.hasFactors) names.push('二级维度汇总');
   names.push('个人数据汇总');
   return names;
+}
+
+// QC Analysis
+document.getElementById('qcBtn').addEventListener('click', runQCAnalysis);
+
+function buildQCData() {
+  const { summary, personalSummary, dimCols, personNames, ratingFormat, promptCount, personCount, scene } = results;
+
+  let text = `## 评测质检数据\n\n`;
+  text += `- 场景: ${scene.toUpperCase()}\n- 评测人数: ${personCount}\n- Prompt 总数: ${promptCount}\n- 一级维度: ${dimCols.map(d => d.name).join('、')}\n\n`;
+
+  // Per-person rating distribution
+  text += `## 一、各评测人打分分布\n\n| 评测人 | 维度 | G(Good) | As good | As bad | B(Bad) | G占比 | B占比 | 个人GSB |\n|---|---|---|---|---|---|---|---|---|\n`;
+  for (const person of summary.persons) {
+    for (const dim of person.dims) {
+      const total = dim.counts.good + dim.counts.as_good + dim.counts.as_bad + dim.counts.bad;
+      text += `| ${person.name} | ${dim.name} | ${dim.counts.good} | ${dim.counts.as_good} | ${dim.counts.as_bad} | ${dim.counts.bad} | ${(dim.ratios.good*100).toFixed(1)}% | ${(dim.ratios.bad*100).toFixed(1)}% | ${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)} |\n`;
+    }
+  }
+
+  // Group average GSB per dimension
+  text += `\n## 二、全组平均 GSB（基准线）\n\n| 维度 | 全组GSB |\n|---|---|\n`;
+  for (const dim of summary.total.dims) {
+    text += `| ${dim.name} | ${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)} |\n`;
+  }
+
+  // Per-person deviation from group
+  text += `\n## 三、各评测人 GSB 与全组平均的偏差\n\n| 评测人 | 维度 | 个人GSB | 全组GSB | 偏差 | 方向是否反转 |\n|---|---|---|---|---|---|\n`;
+  for (const person of summary.persons) {
+    for (let di = 0; di < person.dims.length; di++) {
+      const pGsb = person.dims[di].gsb;
+      const gGsb = summary.total.dims[di].gsb;
+      const pVal = pGsb === Infinity ? 999 : pGsb;
+      const gVal = gGsb === Infinity ? 999 : gGsb;
+      const reversed = (pVal > 1 && gVal < 1) || (pVal < 1 && gVal > 1);
+      text += `| ${person.name} | ${person.dims[di].name} | ${pGsb === Infinity ? '∞' : pGsb.toFixed(3)} | ${gGsb === Infinity ? '∞' : gGsb.toFixed(3)} | ${(pVal - gVal).toFixed(3)} | ${reversed ? '⚠️ 是' : '否'} |\n`;
+    }
+  }
+
+  // All-same detection (all dimensions same vote per prompt)
+  text += `\n## 四、四维度全同检测（每题所有维度打分完全一样的比例）\n\n| 评测人 | 全同题数 | 全同率 | 是否异常(≥25%) |\n|---|---|---|---|\n`;
+  // Recompute from personalSummary
+  for (let p = 0; p < personNames.length; p++) {
+    let allSameCount = 0;
+    for (let i = 0; i < personalSummary.length; i++) {
+      const ratings = personalSummary[i].personRatings[p];
+      if (ratings.length > 1 && ratings.every(r => r === ratings[0])) allSameCount++;
+    }
+    const rate = allSameCount / promptCount;
+    text += `| ${personNames[p]} | ${allSameCount} | ${(rate*100).toFixed(1)}% | ${rate >= 0.25 ? '⚠️ 异常' : '正常'} |\n`;
+  }
+
+  // Cross-person agreement per prompt (majority vote)
+  text += `\n## 五、评测人与多数意见的偏离统计\n\n`;
+  text += `对每条 prompt 的综合评价维度，取多数投票结果为"共识"。统计每人偏离共识的次数。\n\n`;
+  text += `| 评测人 | 偏离次数 | 偏离率 | 严重偏离(方向反转) |\n|---|---|---|---|\n`;
+
+  const lastDimIdx = dimCols.length - 1; // 综合评价 is last
+  for (let p = 0; p < personNames.length; p++) {
+    let devCount = 0, severeCount = 0;
+    for (let i = 0; i < personalSummary.length; i++) {
+      const myRating = personalSummary[i].personRatings[p][lastDimIdx];
+      const consensus = personalSummary[i].consensus[lastDimIdx];
+      if (!myRating) continue;
+      const myDir = (myRating === ratingFormat.good || myRating === ratingFormat.as_bad) ? 'A' : 'B';
+      const consDir = consensus.gsb >= 1 ? 'A' : 'B';
+      if (myDir !== consDir) {
+        devCount++;
+        if ((myRating === ratingFormat.good && consensus.gsb < 0.7) ||
+            (myRating === ratingFormat.bad && consensus.gsb > 1.5)) {
+          severeCount++;
+        }
+      }
+    }
+    text += `| ${personNames[p]} | ${devCount} | ${(devCount/promptCount*100).toFixed(1)}% | ${severeCount} |\n`;
+  }
+
+  return text;
+}
+
+async function runQCAnalysis() {
+  const apiKey = document.getElementById('apiKey').value.trim();
+  const baseUrl = document.getElementById('apiBaseUrl').value.trim();
+  const model = document.getElementById('aiModel').value;
+
+  if (!apiKey) { showStatus('error', '请填写 API Key'); return; }
+  if (!results) { showStatus('error', '请先上传数据并点击"开始计算"'); return; }
+
+  const qcBtn = document.getElementById('qcBtn');
+  qcBtn.disabled = true;
+  qcBtn.textContent = '质检中...';
+
+  const tabsEl = document.getElementById('tabs');
+  let tabNames = getTabNames();
+  if (!tabNames.includes('人员质检')) tabNames.push('人员质检');
+  tabsEl.innerHTML = tabNames.map((name, i) =>
+    `<div class="tab ${i === tabNames.length - 1 ? 'active' : ''}" data-tab="${i}">${name}</div>`
+  ).join('');
+  tabsEl.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabsEl.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      renderTab(parseInt(tab.dataset.tab), tabNames);
+    });
+  });
+
+  const content = document.getElementById('sheetContent');
+  content.innerHTML = '<div class="ai-loading"><span class="spinner"></span>正在进行评测人员质检分析...</div>';
+
+  const qcData = buildQCData();
+
+  const systemPrompt = `你是评测质量控制专家。根据提供的评测人员打分数据，进行质量检查并输出质检报告。
+
+分析维度：
+1. **打分分布异常**：某人是否高度集中于单一选项（如>70%给同一方向），与全组差异大
+2. **方向反转**：某人在某维度的GSB方向与全组相反（全组>1但此人<1，或反之）
+3. **四维全同**：所有维度打一样分的比例异常高（≥25%说明可能无脑统一打分）
+4. **偏离共识**：与多数评测人意见不一致的比例，区分轻微偏离和严重偏离
+
+GSB体系：
+- G (Good) / G（Good）：模型A更好
+- As bad / AS bad：接近但A略好（注意名称反直觉）
+- As good / AS good：接近但B略好
+- B (Bad) / B（Bad）：模型B更好
+- GSB > 1 = A优，< 1 = B优
+
+输出要求：
+1. **人员总览表**：每人的风险等级（高风险/需关注/合格）+ 核心问题简述
+2. **详细分析**：每个高风险/需关注人员的具体问题证据
+3. **结论**：建议淘汰 / 重点观察 / 基本合格的名单，附理由
+4. 对重点观察人员，给出薄弱维度和培训方向
+
+写作原则：
+- 用表格展示数据，简洁直接
+- 每个结论有数据支撑
+- 不套模板，有什么问题说什么`;
+
+  try {
+    const response = await fetch(`${baseUrl}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: model,
+        max_tokens: 4096,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: `以下是评测人员质检数据，请产出质检报告：\n\n${qcData}` }]
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`API 请求失败 (${response.status}): ${errText}`);
+    }
+
+    const data = await response.json();
+    const reportText = data.content[0].text;
+    results.qcReport = reportText;
+    renderAIReport(content, reportText);
+    showStatus('success', '评测人员质检报告生成完成');
+  } catch (err) {
+    content.innerHTML = `<div class="empty-state"><p style="color:#c62828;">质检分析失败: ${err.message}</p></div>`;
+    showStatus('error', '质检分析失败: ' + err.message);
+  } finally {
+    qcBtn.disabled = false;
+    qcBtn.textContent = 'AI 评测人员质检';
+  }
 }
 </script>
 </body>
