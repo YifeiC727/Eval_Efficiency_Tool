@@ -1075,7 +1075,7 @@ function exportExcel() {
         const personFormulas = { b: [], ag: [], ab: [], g: [] };
         for (let p = 0; p < personCount; p++) {
           const col = getPersonDimCol(p, di);
-          const range = `个人数据汇总!${col}$2:${col}$${lastDataRow}`;
+          const range = `'个人数据汇总'!${col}$2:${col}$${lastDataRow}`;
           personFormulas.b.push(`COUNTIF(${range},"${ratingFormat.bad}")`);
           personFormulas.ag.push(`COUNTIF(${range},"${ratingFormat.as_good}")`);
           personFormulas.ab.push(`COUNTIF(${range},"${ratingFormat.as_bad}")`);
@@ -1087,7 +1087,7 @@ function exportExcel() {
         gFormula = personFormulas.g.join('+');
       } else {
         const col = getPersonDimCol(personIdx, di);
-        const range = `个人数据汇总!${col}$2:${col}$${lastDataRow}`;
+        const range = `'个人数据汇总'!${col}$2:${col}$${lastDataRow}`;
         bFormula = `COUNTIF(${range},"${ratingFormat.bad}")`;
         agFormula = `COUNTIF(${range},"${ratingFormat.as_good}")`;
         abFormula = `COUNTIF(${range},"${ratingFormat.as_bad}")`;
@@ -1145,11 +1145,11 @@ function exportExcel() {
         // Build COUNTIFS: match tag value in any of the tag columns OR
         let countBase;
         if (tagColLetters.length === 1) {
-          countBase = (rating) => `COUNTIFS(原始数据汇总!$${tagColLetters[0]}:$${tagColLetters[0]},"${val.value}",原始数据汇总!$${dimColLetter}:$${dimColLetter},"${rating}")`;
+          countBase = (rating) => `COUNTIFS('原始数据汇总'!$${tagColLetters[0]}:$${tagColLetters[0]},"${val.value}",'原始数据汇总'!$${dimColLetter}:$${dimColLetter},"${rating}")`;
         } else {
           // Multiple tag cols: sum COUNTIFS for each col
           countBase = (rating) => tagColLetters.map(tl =>
-            `COUNTIFS(原始数据汇总!$${tl}:$${tl},"${val.value}",原始数据汇总!$${dimColLetter}:$${dimColLetter},"${rating}")`
+            `COUNTIFS('原始数据汇总'!$${tl}:$${tl},"${val.value}",'原始数据汇总'!$${dimColLetter}:$${dimColLetter},"${rating}")`
           ).join('+');
         }
 
