@@ -619,8 +619,24 @@ function processData() {
 
   const ratingFormat = config.ratingFormat;
 
-  // Find dimension columns from config
+  // Auto-detect actual rating format from data (handles full-width brackets, case variants)
   const dimCols = findDimensionColumns(headers, config.dimensions);
+  if (dimCols.length > 0) {
+    const sampleVals = new Set();
+    for (let i = 0; i < Math.min(dataRows.length, 500); i++) {
+      for (const dim of dimCols) {
+        const v = dataRows[i][dim.col];
+        if (v) sampleVals.add(String(v).trim());
+      }
+    }
+    for (const v of sampleVals) {
+      const vl = v.toLowerCase();
+      if (vl.includes('good') && !vl.includes('as')) ratingFormat.good = v;
+      else if (vl.includes('bad') && !vl.includes('as')) ratingFormat.bad = v;
+      else if (vl.includes('as') && vl.includes('good')) ratingFormat.as_good = v;
+      else if (vl.includes('as') && vl.includes('bad')) ratingFormat.as_bad = v;
+    }
+  }
   // Find tag columns from config
   const tagCols = findTagColumns(headers, config.tags);
 
@@ -826,6 +842,7 @@ function countRatings(rows, colIdx, ratingFormat) {
     if (v === ratingFormat.good) counts.good++;
     else if (v === ratingFormat.as_good) counts.as_good++;
     else if (v === ratingFormat.as_bad) counts.as_bad++;
+    else if (v === ratingFormat.bad) counts.bad++;
     else if (v === ratingFormat.bad) counts.bad++;
   }
   return counts;
