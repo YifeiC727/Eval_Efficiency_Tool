@@ -809,6 +809,7 @@ function parsePersonInfo(sheet, personCount, groupMode) {
 function countRatings(rows, colIdx, ratingFormat) {
   const counts = { good: 0, as_good: 0, as_bad: 0, bad: 0 };
   for (const row of rows) {
+    if (!row) continue;
     const val = row[colIdx];
     if (!val) continue;
     const v = String(val).trim();
