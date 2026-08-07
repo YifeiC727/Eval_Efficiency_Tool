@@ -145,6 +145,13 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
 .config-dim-body .preset-btns button { padding: 5px 12px; font-size: 12px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; background: #f8f8f8; }
 .config-dim-body .preset-btns button:hover { background: #e8e8e8; }
 .config-dim-body .preset-btns button.active { background: #4f8cf7; color: #fff; border-color: #4f8cf7; }
+
+.person-filter { background: #fff; border-radius: 12px; padding: 16px 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.person-filter-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; font-size: 14px; font-weight: 600; color: #333; }
+.person-filter-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.person-filter-list label { display: flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 6px; border: 1px solid #e0e0e0; font-size: 13px; cursor: pointer; transition: all 0.15s; user-select: none; }
+.person-filter-list label:hover { border-color: #4f8cf7; }
+.person-filter-list label.excluded { background: #fde8e8; border-color: #ef9a9a; color: #c62828; text-decoration: line-through; }
 </style>
 </head>
 <body>
@@ -242,6 +249,14 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
     <button class="btn btn-export" id="exportBtn" disabled>导出 Excel</button>
     <button class="btn btn-export" id="exportReportsBtn" disabled style="background:#1565c0;">导出报告(MD)</button>
     <button class="btn" id="saveBtn" disabled style="background:#5c6bc0;">保存记录</button>
+  </div>
+
+  <div class="person-filter" id="personFilter" style="display:none;">
+    <div class="person-filter-header">
+      <span>评测人筛选</span>
+      <button class="btn" id="recalcBtn" style="padding:6px 14px;font-size:13px;">重新计算</button>
+    </div>
+    <div class="person-filter-list" id="personFilterList"></div>
   </div>
 
   <div class="tabs" id="tabs" style="display:none"></div>
@@ -417,6 +432,7 @@ document.getElementById('sceneSelect').addEventListener('change', (e) => {
 let workbookData = null;
 let results = null;
 let detectedScene = null;
+let cachedProcessData = null; // stores intermediate data for re-filtering
 
 // Upload handling
 const uploadArea = document.getElementById('uploadArea');
@@ -638,7 +654,17 @@ function processData() {
   // Check if has factors
   const hasFactors = dimCols.some(d => d.factorCol !== null);
 
-  // Generate results
+  // Save intermediate data for re-filtering
+  cachedProcessData = { personData, personNames, dimCols, tagCols, ratingFormat, hasFactors, headers, config, promptCount, personCount };
+
+  // Generate results with all persons
+  generateResults(personData, personNames, dimCols, tagCols, ratingFormat, hasFactors, headers, config, promptCount, personCount);
+
+  // Show person filter
+  renderPersonFilter(personNames);
+}
+
+function generateResults(personData, personNames, dimCols, tagCols, ratingFormat, hasFactors, headers, config, promptCount, personCount) {
   // Extract prompt metadata (text + URLs) from first person's data
   const modelACol = headers.indexOf('模型A') >= 0 ? headers.indexOf('模型A') : headers.indexOf('模型A');
   const modelBCol = headers.indexOf('模型B') >= 0 ? headers.indexOf('模型B') : headers.indexOf('模型B');
