@@ -2255,7 +2255,8 @@ function exportHtmlReport() {
   };
 
   const dataJson = JSON.stringify(entry);
-  const html = buildReportHtml(entry, dataJson);
+  const dataBase64 = btoa(unescape(encodeURIComponent(dataJson)));
+  const html = buildReportHtml(entry, dataBase64);
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
@@ -2265,7 +2266,7 @@ function exportHtmlReport() {
   showStatus('success', 'HTML 报告已导出');
 }
 
-function buildReportHtml(entry, dataJson) {
+function buildReportHtml(entry, dataBase64) {
   const rf = entry.scene === 'wm' ? PRESETS.wm.ratingFormat : PRESETS.t2v.ratingFormat;
 
   // Build summary table HTML
@@ -2347,7 +2348,7 @@ ${personHtml}
 ${aiHtml}
 ${qcHtml}
 
-<script id="__eval_report_data__" type="application/json">${dataJson.replace(/<\//g, '<\\/')}</script>
+<meta name="eval-report-data" content="${dataBase64}">
 <p style="margin-top:30px;color:#999;font-size:12px;">此文件可导入回评测工具继续分析（点击工具中"导入 HTML 报告"按钮）</p>
 </body>
 </html>`;
@@ -2383,10 +2384,10 @@ function importHtmlReport(event) {
   const reader = new FileReader();
   reader.onload = (e) => {
     const htmlContent = e.target.result;
-    const match = htmlContent.match(/<script id="__eval_report_data__" type="application\/json">([\s\S]*?)<\/script>/);
+    const match = htmlContent.match(/<meta name="eval-report-data" content="([^"]+)">/);
     if (!match) { showStatus('error', '此 HTML 文件不包含评测报告数据'); return; }
     try {
-      const entry = JSON.parse(match[1].replace(/<\\\//g, '</'));
+      const entry = JSON.parse(decodeURIComponent(escape(atob(match[1]))));
       results = {
         scene: entry.scene,
         promptCount: entry.promptCount,
