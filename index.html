@@ -248,7 +248,9 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
     <button class="btn btn-ai" id="qcBtn" disabled style="background:#e65100;">AI 评测人员质检</button>
     <button class="btn btn-export" id="exportBtn" disabled>导出 Excel</button>
     <button class="btn btn-export" id="exportReportsBtn" disabled style="background:#1565c0;">导出报告(MD)</button>
-    <button class="btn" id="saveBtn" disabled style="background:#5c6bc0;">保存记录</button>
+    <button class="btn" id="saveBtn" disabled style="background:#5c6bc0;">导出 HTML 报告</button>
+    <button class="btn btn-outline" id="importHtmlBtn" style="border:1px solid #5c6bc0;color:#5c6bc0;">导入 HTML 报告</button>
+    <input type="file" id="htmlImportInput" accept=".html" style="display:none">
     <a href="staff.html" class="btn" style="background:#607d8b;text-decoration:none;">人员管理</a>
   </div>
 
@@ -485,7 +487,9 @@ document.getElementById('processBtn').addEventListener('click', () => {
   }
 });
 
-document.getElementById('saveBtn').addEventListener('click', saveCurrentToHistory);
+document.getElementById('saveBtn').addEventListener('click', exportHtmlReport);
+document.getElementById('importHtmlBtn').addEventListener('click', () => document.getElementById('htmlImportInput').click());
+document.getElementById('htmlImportInput').addEventListener('change', importHtmlReport);
 
 function syncToStaffManagement() {
   if (!results || !results.personNames) return;
@@ -2232,12 +2236,12 @@ function saveHistory(list) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
 }
 
-function saveCurrentToHistory() {
+function exportHtmlReport() {
   if (!results) return;
+  const fileName = document.getElementById('fileInfo').textContent.replace('已加载: ', '').split(' (')[0] || '未命名';
   const entry = {
-    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     timestamp: new Date().toISOString(),
-    fileName: document.getElementById('fileInfo').textContent.replace('已加载: ', '').split(' (')[0] || '未命名',
+    fileName,
     scene: results.scene,
     promptCount: results.promptCount,
     personCount: results.personCount,
@@ -2249,20 +2253,174 @@ function saveCurrentToHistory() {
     aiReport: results.aiReport || null,
     qcReport: results.qcReport || null,
   };
-  const history = getHistory();
-  history.unshift(entry);
-  if (history.length > 20) history.pop();
-  try {
-    saveHistory(history);
-    showStatus('success', '已保存到历史记录');
-  } catch (e) {
-    if (e.name === 'QuotaExceededError') {
-      history.pop();
-      saveHistory(history);
-      showStatus('info', '存储空间有限，已保存（旧记录被移除）');
+
+  const dataJson = JSON.stringify(entry);
+  const html = buildReportHtml(entry, dataJson);
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `评测报告_${fileName.slice(0,30)}_${new Date().toISOString().slice(0,10)}.html`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+  showStatus('success', 'HTML 报告已导出');
+}
+
+function buildReportHtml(entry, dataJson) {
+  const rf = entry.scene === 'wm' ? PRESETS.wm.ratingFormat : PRESETS.t2v.ratingFormat;
+
+  // Build summary table HTML
+  let summaryHtml = '';
+  if (entry.summary && entry.summary.total) {
+    summaryHtml += `<h2>汇总结果（${entry.summary.total.name}）</h2>`;
+    summaryHtml += '<table><tr><th>能力类型</th><th>B(Bad)数</th><th>As good数</th><th>As bad数</th><th>G(Good)数</th><th>B占比</th><th>G占比</th><th>Similar占比</th><th>GSB</th></tr>';
+    for (const dim of entry.summary.total.dims) {
+      const sim = dim.ratios.as_good + dim.ratios.as_bad;
+      const gsbClass = dim.gsb > 1 ? 'good' : dim.gsb < 1 ? 'bad' : '';
+      summaryHtml += `<tr><td>${dim.name}</td><td>${dim.counts.bad}</td><td>${dim.counts.as_good}</td><td>${dim.counts.as_bad}</td><td>${dim.counts.good}</td><td>${(dim.ratios.bad*100).toFixed(1)}%</td><td>${(dim.ratios.good*100).toFixed(1)}%</td><td>${(sim*100).toFixed(1)}%</td><td class="${gsbClass}">${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)}</td></tr>`;
+    }
+    summaryHtml += '</table>';
+  }
+
+  // Per-person summary
+  let personHtml = '';
+  if (entry.summary && entry.summary.persons) {
+    for (const person of entry.summary.persons) {
+      personHtml += `<h3>${person.name}</h3><table><tr><th>能力类型</th><th>B</th><th>Ag</th><th>Ab</th><th>G</th><th>GSB</th></tr>`;
+      for (const dim of person.dims) {
+        const gsbClass = dim.gsb > 1 ? 'good' : dim.gsb < 1 ? 'bad' : '';
+        personHtml += `<tr><td>${dim.name}</td><td>${dim.counts.bad}</td><td>${dim.counts.as_good}</td><td>${dim.counts.as_bad}</td><td>${dim.counts.good}</td><td class="${gsbClass}">${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)}</td></tr>`;
+      }
+      personHtml += '</table>';
     }
   }
-  renderHistory();
+
+  // AI report
+  let aiHtml = '';
+  if (entry.aiReport) {
+    aiHtml = `<h2>AI 分析报告</h2><div class="ai-report">${markdownToHtml(entry.aiReport)}</div>`;
+  }
+
+  // QC report
+  let qcHtml = '';
+  if (entry.qcReport) {
+    qcHtml = `<h2>评测人员质检</h2><div class="ai-report">${markdownToHtml(entry.qcReport)}</div>`;
+  }
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>评测报告 - ${entry.fileName}</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f7fa; color: #1a1a2e; padding: 24px; max-width: 1200px; margin: 0 auto; }
+h1 { font-size: 22px; margin-bottom: 6px; }
+h2 { font-size: 17px; margin: 24px 0 10px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px; }
+h3 { font-size: 14px; margin: 16px 0 6px; color: #555; }
+.meta { color: #666; font-size: 13px; margin-bottom: 20px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 10px 0; }
+th, td { border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; }
+th { background: #f5f7fa; font-weight: 600; }
+td:first-child { text-align: left; font-weight: 500; }
+.good { color: #2e7d32; }
+.bad { color: #c62828; }
+.ai-report { line-height: 1.8; font-size: 14px; }
+.ai-report h1 { font-size: 18px; }
+.ai-report h2 { font-size: 16px; }
+.ai-report h3 { font-size: 14px; }
+.ai-report ul { margin: 8px 0 8px 20px; }
+.ai-report li { margin: 4px 0; }
+.ai-report table { font-size: 12px; }
+.ai-report strong { color: #1a1a2e; }
+.ai-report blockquote { border-left: 3px solid #7c3aed; padding-left: 12px; margin: 12px 0; color: #555; }
+.reimport-btn { display: inline-block; margin-top: 16px; padding: 8px 16px; background: #5c6bc0; color: #fff; border-radius: 6px; text-decoration: none; font-size: 13px; cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>评测报告：${entry.fileName}</h1>
+<div class="meta">
+  场景: ${(entry.scene || '').toUpperCase()} | 评测人数: ${entry.personCount} | Prompt数: ${entry.promptCount} | 生成时间: ${new Date(entry.timestamp).toLocaleString()}
+</div>
+
+${summaryHtml}
+${personHtml}
+${aiHtml}
+${qcHtml}
+
+<script id="__eval_report_data__" type="application/json">${dataJson.replace(/<\//g, '<\\/')}</script>
+<p style="margin-top:30px;color:#999;font-size:12px;">此文件可导入回评测工具继续分析（点击工具中"导入 HTML 报告"按钮）</p>
+</body>
+</html>`;
+}
+
+function markdownToHtml(md) {
+  let html = md
+    .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+    .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+    .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+    .replace(/^\> (.*$)/gm, '<blockquote>$1</blockquote>')
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`(.*?)`/g, '<code>$1</code>')
+    .replace(/^\- (.*$)/gm, '<li>$1</li>');
+  // Tables
+  html = html.replace(/(\|.*\|[\r\n]+\|[-| :]+\|[\r\n]+((\|.*\|[\r\n]*)+))/g, (match) => {
+    const lines = match.trim().split('\n').filter(l => l.trim());
+    if (lines.length < 3) return match;
+    const headers = lines[0].split('|').filter(c => c.trim()).map(c => c.trim());
+    const rows = lines.slice(2).map(line => line.split('|').filter(c => c.trim()).map(c => c.trim()));
+    let table = '<table><tr>' + headers.map(h => `<th>${h}</th>`).join('') + '</tr>';
+    for (const row of rows) table += '<tr>' + row.map(c => `<td>${c}</td>`).join('') + '</tr>';
+    return table + '</table>';
+  });
+  html = html.replace(/(<li>.*?<\/li>\n?)+/gs, (m) => `<ul>${m}</ul>`);
+  html = html.split('\n').map(l => l.trim() && !l.startsWith('<') ? `<p>${l}</p>` : l).join('\n');
+  return html;
+}
+
+function importHtmlReport(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const htmlContent = e.target.result;
+    const match = htmlContent.match(/<script id="__eval_report_data__" type="application\/json">([\s\S]*?)<\/script>/);
+    if (!match) { showStatus('error', '此 HTML 文件不包含评测报告数据'); return; }
+    try {
+      const entry = JSON.parse(match[1].replace(/<\\\//g, '</'));
+      results = {
+        scene: entry.scene,
+        promptCount: entry.promptCount,
+        personCount: entry.personCount,
+        personNames: entry.personNames,
+        dimCols: entry.summary.total.dims.map(d => ({ name: d.name, col: null, factorCol: null })),
+        tagCols: [],
+        summary: entry.summary,
+        dimensionBreakdown: entry.dimensionBreakdown || [],
+        hasFactors: entry.hasFactors,
+        factorSummary: entry.factorSummary,
+        personalSummary: [],
+        promptMeta: [],
+        aiReport: entry.aiReport,
+        qcReport: entry.qcReport,
+        ratingFormat: entry.scene === 'wm' ? PRESETS.wm.ratingFormat : PRESETS.t2v.ratingFormat,
+      };
+
+      document.getElementById('fileInfo').style.display = 'block';
+      document.getElementById('fileInfo').textContent = `已导入报告: ${entry.fileName} (${new Date(entry.timestamp).toLocaleString()})`;
+      document.getElementById('tabs').style.display = 'flex';
+      document.getElementById('exportBtn').disabled = false;
+      document.getElementById('saveBtn').disabled = false;
+      document.getElementById('aiBtn').disabled = false;
+      document.getElementById('qcBtn').disabled = false;
+
+      renderResults();
+      showStatus('success', '已从 HTML 报告导入，可继续分析或重新导出');
+    } catch (err) {
+      showStatus('error', '解析报告数据失败: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = '';
 }
 
 function loadFromHistory(id) {
