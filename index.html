@@ -2250,6 +2250,9 @@ function exportHtmlReport() {
     dimensionBreakdown: results.dimensionBreakdown,
     hasFactors: results.hasFactors,
     factorSummary: results.factorSummary || null,
+    personalSummary: results.personalSummary || [],
+    promptMeta: results.promptMeta || [],
+    dimCols: (results.dimCols || []).map(d => ({ name: d.name })),
     aiReport: results.aiReport || null,
     qcReport: results.qcReport || null,
   };
@@ -2268,11 +2271,12 @@ function exportHtmlReport() {
 
 function buildReportHtml(entry, dataBase64) {
   const rf = entry.scene === 'wm' ? PRESETS.wm.ratingFormat : PRESETS.t2v.ratingFormat;
+  const dimNames = (entry.dimCols || entry.summary.total.dims).map(d => d.name);
 
-  // Build summary table HTML
+  // 1. 汇总结果
   let summaryHtml = '';
   if (entry.summary && entry.summary.total) {
-    summaryHtml += `<h2>汇总结果（${entry.summary.total.name}）</h2>`;
+    summaryHtml += `<h2>一、汇总结果（${entry.summary.total.name}）</h2>`;
     summaryHtml += '<table><tr><th>能力类型</th><th>B(Bad)数</th><th>As good数</th><th>As bad数</th><th>G(Good)数</th><th>B占比</th><th>G占比</th><th>Similar占比</th><th>GSB</th></tr>';
     for (const dim of entry.summary.total.dims) {
       const sim = dim.ratios.as_good + dim.ratios.as_bad;
@@ -2280,18 +2284,95 @@ function buildReportHtml(entry, dataBase64) {
       summaryHtml += `<tr><td>${dim.name}</td><td>${dim.counts.bad}</td><td>${dim.counts.as_good}</td><td>${dim.counts.as_bad}</td><td>${dim.counts.good}</td><td>${(dim.ratios.bad*100).toFixed(1)}%</td><td>${(dim.ratios.good*100).toFixed(1)}%</td><td>${(sim*100).toFixed(1)}%</td><td class="${gsbClass}">${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)}</td></tr>`;
     }
     summaryHtml += '</table>';
+    if (entry.summary.persons) {
+      for (const person of entry.summary.persons) {
+        summaryHtml += `<h3>${person.name}</h3><table><tr><th>能力类型</th><th>B</th><th>Ag</th><th>Ab</th><th>G</th><th>B占比</th><th>G占比</th><th>Similar</th><th>GSB</th></tr>`;
+        for (const dim of person.dims) {
+          const sim = dim.ratios.as_good + dim.ratios.as_bad;
+          const gsbClass = dim.gsb > 1 ? 'good' : dim.gsb < 1 ? 'bad' : '';
+          summaryHtml += `<tr><td>${dim.name}</td><td>${dim.counts.bad}</td><td>${dim.counts.as_good}</td><td>${dim.counts.as_bad}</td><td>${dim.counts.good}</td><td>${(dim.ratios.bad*100).toFixed(1)}%</td><td>${(dim.ratios.good*100).toFixed(1)}%</td><td>${(sim*100).toFixed(1)}%</td><td class="${gsbClass}">${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)}</td></tr>`;
+        }
+        summaryHtml += '</table>';
+      }
+    }
   }
 
-  // Per-person summary
-  let personHtml = '';
-  if (entry.summary && entry.summary.persons) {
-    for (const person of entry.summary.persons) {
-      personHtml += `<h3>${person.name}</h3><table><tr><th>能力类型</th><th>B</th><th>Ag</th><th>Ab</th><th>G</th><th>GSB</th></tr>`;
-      for (const dim of person.dims) {
-        const gsbClass = dim.gsb > 1 ? 'good' : dim.gsb < 1 ? 'bad' : '';
-        personHtml += `<tr><td>${dim.name}</td><td>${dim.counts.bad}</td><td>${dim.counts.as_good}</td><td>${dim.counts.as_bad}</td><td>${dim.counts.good}</td><td class="${gsbClass}">${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)}</td></tr>`;
+  // 2. 维度汇总
+  let dimHtml = '';
+  if (entry.dimensionBreakdown && entry.dimensionBreakdown.length > 0) {
+    dimHtml += '<h2>二、维度汇总（按标签分类）</h2>';
+    for (const bd of entry.dimensionBreakdown) {
+      dimHtml += `<h3>${bd.tagName}</h3><table><tr><th>标签值</th><th>样本数</th><th>能力类型</th><th>B占比</th><th>G占比</th><th>Similar</th><th>GSB</th></tr>`;
+      for (const val of bd.values) {
+        for (let di = 0; di < val.dims.length; di++) {
+          const dim = val.dims[di];
+          const sim = dim.ratios.as_good + dim.ratios.as_bad;
+          const gsbClass = dim.gsb > 1 ? 'good' : dim.gsb < 1 ? 'bad' : '';
+          dimHtml += `<tr>${di === 0 ? `<td rowspan="${val.dims.length}">${val.value}</td><td rowspan="${val.dims.length}">${val.matchedCount}</td>` : ''}<td>${dim.name}</td><td>${(dim.ratios.bad*100).toFixed(1)}%</td><td>${(dim.ratios.good*100).toFixed(1)}%</td><td>${(sim*100).toFixed(1)}%</td><td class="${gsbClass}">${dim.gsb === Infinity ? '∞' : dim.gsb.toFixed(3)}</td></tr>`;
+        }
       }
-      personHtml += '</table>';
+      dimHtml += '</table>';
+    }
+  }
+
+  // 3. 二级维度汇总
+  let factorHtml = '';
+  if (entry.hasFactors && entry.factorSummary) {
+    factorHtml += '<h2>三、二级维度汇总</h2><table><tr><th>一级分类</th><th>二级分类</th><th>Good方向</th><th>Bad方向</th><th>合计</th></tr>';
+    for (const [dimName, factors] of Object.entries(entry.factorSummary)) {
+      const sorted = Object.entries(factors).sort((a, b) => (b[1].good + b[1].bad) - (a[1].good + a[1].bad));
+      for (let i = 0; i < sorted.length; i++) {
+        const [name, counts] = sorted[i];
+        const total = counts.good + counts.bad;
+        factorHtml += `<tr>${i === 0 ? `<td rowspan="${sorted.length}">${dimName}</td>` : ''}<td>${name}</td><td class="good">${counts.good}</td><td class="bad">${counts.bad}</td><td>${total}</td></tr>`;
+      }
+    }
+    factorHtml += '</table>';
+  }
+
+  // 4. 个人数据汇总（前50条）
+  let personalHtml = '';
+  if (entry.personalSummary && entry.personalSummary.length > 0) {
+    const maxRows = Math.min(entry.personalSummary.length, 50);
+    personalHtml += '<h2>四、个人数据汇总</h2><table><tr><th>序号</th>';
+    for (const dn of dimNames) personalHtml += `<th>综合-${dn.slice(0,4)}</th>`;
+    personalHtml += '</tr>';
+    for (let i = 0; i < maxRows; i++) {
+      const row = entry.personalSummary[i];
+      personalHtml += `<tr><td>${row.index}</td>`;
+      for (const c of row.consensus) {
+        const cls = c.gsb > 1 ? 'good' : c.gsb < 1 ? 'bad' : '';
+        personalHtml += `<td class="${cls}">${c.gsb === Infinity ? '∞' : c.gsb.toFixed(2)}</td>`;
+      }
+      personalHtml += '</tr>';
+    }
+    if (entry.personalSummary.length > maxRows) personalHtml += `<tr><td colspan="100" style="color:#999;">... 仅显示前${maxRows}条 ...</td></tr>`;
+    personalHtml += '</table>';
+  }
+
+  // 5. 最差案例
+  let worstHtml = '';
+  if (entry.personalSummary && entry.personalSummary.length > 0 && entry.promptMeta && entry.promptMeta.length > 0) {
+    const lastDimIdx = dimNames.length - 1;
+    const promptGSBs = entry.personalSummary.map((row, i) => ({ index: i, gsb: row.consensus[lastDimIdx].gsb }));
+    promptGSBs.sort((a, b) => a.gsb - b.gsb);
+    const worst20 = promptGSBs.slice(0, 20);
+
+    worstHtml += '<h2>五、最差案例（综合评价 GSB 最低 20 条）</h2>';
+    for (let rank = 0; rank < worst20.length; rank++) {
+      const item = worst20[rank];
+      const meta = entry.promptMeta[item.index];
+      if (!meta) continue;
+      worstHtml += `<div style="background:#f8f8f8;border:1px solid #eee;border-radius:8px;padding:12px;margin:10px 0;">`;
+      worstHtml += `<strong>#${rank+1}</strong> (序号${meta.index}) GSB: <span class="bad">${item.gsb === Infinity ? '∞' : item.gsb.toFixed(3)}</span>`;
+      worstHtml += `<p style="font-size:12px;color:#333;margin:6px 0;">${String(meta.prompt || '').slice(0, 200)}</p>`;
+      if (meta.modelAUrl || meta.modelBUrl) {
+        worstHtml += '<div style="display:flex;gap:10px;margin-top:8px;">';
+        if (meta.modelAUrl) worstHtml += `<div style="flex:1;"><div style="font-size:11px;font-weight:600;margin-bottom:4px;">模型A (Ours)</div><video controls preload="metadata" style="width:100%;border-radius:4px;" src="${meta.modelAUrl}"></video></div>`;
+        if (meta.modelBUrl) worstHtml += `<div style="flex:1;"><div style="font-size:11px;font-weight:600;margin-bottom:4px;">模型B (竞品)</div><video controls preload="metadata" style="width:100%;border-radius:4px;" src="${meta.modelBUrl}"></video></div>`;
+        worstHtml += '</div>';
+      }
+      worstHtml += '</div>';
     }
   }
 
@@ -2316,25 +2397,24 @@ function buildReportHtml(entry, dataBase64) {
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f7fa; color: #1a1a2e; padding: 24px; max-width: 1200px; margin: 0 auto; }
 h1 { font-size: 22px; margin-bottom: 6px; }
-h2 { font-size: 17px; margin: 24px 0 10px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px; }
+h2 { font-size: 17px; margin: 28px 0 10px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px; }
 h3 { font-size: 14px; margin: 16px 0 6px; color: #555; }
 .meta { color: #666; font-size: 13px; margin-bottom: 20px; }
-table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 10px 0; }
-th, td { border: 1px solid #e0e0e0; padding: 6px 10px; text-align: center; }
+table { border-collapse: collapse; width: 100%; font-size: 12px; margin: 10px 0; }
+th, td { border: 1px solid #e0e0e0; padding: 5px 8px; text-align: center; }
 th { background: #f5f7fa; font-weight: 600; }
 td:first-child { text-align: left; font-weight: 500; }
 .good { color: #2e7d32; }
 .bad { color: #c62828; }
 .ai-report { line-height: 1.8; font-size: 14px; }
 .ai-report h1 { font-size: 18px; }
-.ai-report h2 { font-size: 16px; }
+.ai-report h2 { font-size: 16px; border: none; }
 .ai-report h3 { font-size: 14px; }
 .ai-report ul { margin: 8px 0 8px 20px; }
 .ai-report li { margin: 4px 0; }
 .ai-report table { font-size: 12px; }
 .ai-report strong { color: #1a1a2e; }
 .ai-report blockquote { border-left: 3px solid #7c3aed; padding-left: 12px; margin: 12px 0; color: #555; }
-.reimport-btn { display: inline-block; margin-top: 16px; padding: 8px 16px; background: #5c6bc0; color: #fff; border-radius: 6px; text-decoration: none; font-size: 13px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -2344,7 +2424,10 @@ td:first-child { text-align: left; font-weight: 500; }
 </div>
 
 ${summaryHtml}
-${personHtml}
+${dimHtml}
+${factorHtml}
+${personalHtml}
+${worstHtml}
 ${aiHtml}
 ${qcHtml}
 
@@ -2393,14 +2476,14 @@ function importHtmlReport(event) {
         promptCount: entry.promptCount,
         personCount: entry.personCount,
         personNames: entry.personNames,
-        dimCols: entry.summary.total.dims.map(d => ({ name: d.name, col: null, factorCol: null })),
+        dimCols: (entry.dimCols || entry.summary.total.dims).map(d => ({ name: d.name, col: null, factorCol: null })),
         tagCols: [],
         summary: entry.summary,
         dimensionBreakdown: entry.dimensionBreakdown || [],
         hasFactors: entry.hasFactors,
         factorSummary: entry.factorSummary,
-        personalSummary: [],
-        promptMeta: [],
+        personalSummary: entry.personalSummary || [],
+        promptMeta: entry.promptMeta || [],
         aiReport: entry.aiReport,
         qcReport: entry.qcReport,
         ratingFormat: entry.scene === 'wm' ? PRESETS.wm.ratingFormat : PRESETS.t2v.ratingFormat,
