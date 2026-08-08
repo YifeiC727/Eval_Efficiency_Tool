@@ -560,14 +560,15 @@ function preprocessShuffledData(sheet) {
 
   const outRows = rows.map(row => colMap.map(c => row[c]));
 
-  // Get unique persons
+  // Get unique persons (preserving sort order used above)
   const persons = [...new Set(rows.map(r => r[colPerson]))].sort();
 
   return {
     headers: outHeaders,
     dataRows: outRows,
     flippedCount,
-    personCount: persons.length
+    personCount: persons.length,
+    personNames: persons
   };
 }
 
@@ -576,6 +577,7 @@ function processData() {
 
   // Detect file format: 乱序 vs 原始数据汇总
   let rawSheet, headers, dataRows;
+  let shuffledPersonNames = null;
 
   if (wb.Sheets['原始数据汇总']) {
     rawSheet = XLSX.utils.sheet_to_json(wb.Sheets['原始数据汇总'], { header: 1, defval: null });
@@ -596,6 +598,7 @@ function processData() {
     const result = preprocessShuffledData(wb.Sheets[sheetName]);
     headers = result.headers;
     dataRows = result.dataRows;
+    shuffledPersonNames = result.personNames;
     showStatus('info', `检测到乱序格式，已自动翻转恢复 ${result.flippedCount} 行，按 ${result.personCount} 人排序`);
   }
 
@@ -685,7 +688,25 @@ function processData() {
   // Parse person info
   let personNames = [];
   const groupMode = document.getElementById('groupMode').value;
-  if (wb.Sheets['测评人信息']) {
+  if (shuffledPersonNames) {
+    // Shuffled format: names come from 标注员名 column
+    if (wb.Sheets['测评人信息']) {
+      // Cross-check with 测评人信息 sheet
+      const infoNames = parsePersonInfo(wb.Sheets['测评人信息'], shuffledPersonNames.length, 'single');
+      const shuffledSet = new Set(shuffledPersonNames);
+      const infoSet = new Set(infoNames.filter(n => !n.startsWith('评测人')));
+      const missingInData = [...infoSet].filter(n => !shuffledSet.has(n));
+      const missingInInfo = [...shuffledSet].filter(n => !infoSet.has(n));
+      if (missingInData.length > 0 || missingInInfo.length > 0) {
+        let msg = '测评人信息与原始数据标注员名不对齐：';
+        if (missingInData.length > 0) msg += `\n测评人信息中有但数据中无: ${missingInData.join('、')}`;
+        if (missingInInfo.length > 0) msg += `\n数据中有但测评人信息中无: ${missingInInfo.join('、')}`;
+        showStatus('error', msg);
+        throw new Error(msg);
+      }
+    }
+    personNames = shuffledPersonNames;
+  } else if (wb.Sheets['测评人信息']) {
     personNames = parsePersonInfo(wb.Sheets['测评人信息'], personCount, groupMode);
   } else {
     for (let i = 0; i < personCount; i++) personNames.push(`评测人${i+1}`);
