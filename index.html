@@ -647,13 +647,6 @@ function processData() {
 
   // Detect prompt count and split data by person (supports partial segments)
   const seqCol = 0;
-  let promptCount = 0;
-  // Find first reset to determine prompt count
-  for (let i = 0; i < dataRows.length; i++) {
-    const seq = parseInt(dataRows[i][seqCol]);
-    if (i > 0 && seq === 1) { promptCount = i; break; }
-  }
-  if (promptCount === 0) promptCount = dataRows.length;
 
   // Split into segments by detecting seq resets or jumps backward
   const personData = [];
@@ -667,6 +660,9 @@ function processData() {
     }
   }
   personData.push(dataRows.slice(segStart)); // last segment
+
+  // promptCount = first segment length (the standard full set)
+  const promptCount = personData[0].length;
 
   const personCount = personData.length;
 
