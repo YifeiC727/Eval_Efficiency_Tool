@@ -501,6 +501,19 @@ function preprocessShuffledData(sheet) {
     throw new Error('乱序格式缺少必要列（A/B/模型A/模型B/标注员名）');
   }
 
+  // Find dimension columns (rating cols that need flipping)
+  // Use config dimensions + also scan headers for known dimension-like columns
+  const config = getActiveConfig();
+  const knownDimNames = new Set([
+    ...config.dimensions,
+    '指令遵从与增益', '动态与物理合理性', '镜头语言与跨镜连贯', '视觉美学', '声音效果', '综合评价',
+    '语义跟随', '初始世界一致性', '运动性', '空间时序一致性'
+  ]);
+  const dimColIndices = [];
+  for (let c = 0; c < headers.length; c++) {
+    if (headers[c] && knownDimNames.has(headers[c])) dimColIndices.push(c);
+  }
+
   // Auto-detect rating format from actual data (handles full-width brackets, case variants)
   const rf = { good: 'G (Good)', as_good: 'As good', as_bad: 'As bad', bad: 'B (Bad)' };
   const sampleVals = new Set();
@@ -516,19 +529,6 @@ function preprocessShuffledData(sheet) {
     else if (vl.includes('bad') && !vl.includes('as')) rf.bad = v;
     else if (vl.includes('as') && vl.includes('good')) rf.as_good = v;
     else if (vl.includes('as') && vl.includes('bad')) rf.as_bad = v;
-  }
-
-  // Find dimension columns (rating cols that need flipping)
-  // Use config dimensions + also scan headers for known dimension-like columns
-  const config = getActiveConfig();
-  const knownDimNames = new Set([
-    ...config.dimensions,
-    '指令遵从与增益', '动态与物理合理性', '镜头语言与跨镜连贯', '视觉美学', '声音效果', '综合评价',
-    '语义跟随', '初始世界一致性', '运动性', '空间时序一致性'
-  ]);
-  const dimColIndices = [];
-  for (let c = 0; c < headers.length; c++) {
-    if (headers[c] && knownDimNames.has(headers[c])) dimColIndices.push(c);
   }
 
   // Flip function
