@@ -249,6 +249,7 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
     <button class="btn btn-export" id="exportBtn" disabled>导出 Excel</button>
     <button class="btn btn-export" id="exportReportsBtn" disabled style="background:#1565c0;">导出报告(MD)</button>
     <button class="btn" id="saveBtn" disabled style="background:#5c6bc0;">保存记录</button>
+    <a href="staff.html" class="btn" style="background:#607d8b;text-decoration:none;">人员管理</a>
   </div>
 
   <div class="person-filter" id="personFilter" style="display:none;">
@@ -477,6 +478,7 @@ document.getElementById('processBtn').addEventListener('click', () => {
     document.getElementById('exportBtn').disabled = false;
     document.getElementById('exportReportsBtn').disabled = false;
     document.getElementById('saveBtn').disabled = false;
+    syncToStaffManagement();
   } catch (err) {
     showStatus('error', '计算出错: ' + err.message);
     console.error(err);
@@ -484,6 +486,51 @@ document.getElementById('processBtn').addEventListener('click', () => {
 });
 
 document.getElementById('saveBtn').addEventListener('click', saveCurrentToHistory);
+
+function syncToStaffManagement() {
+  if (!results || !results.personNames) return;
+  const fileName = document.getElementById('fileInfo').textContent.replace('已加载: ', '').split(' (')[0] || '';
+  if (!confirm(`是否将本次评测参与人员同步到人员管理？\n任务: ${fileName}\n人员: ${results.personNames.join('、')}`)) return;
+
+  const STAFF_KEY = 'eval_personnel_data';
+  let staffData;
+  try { staffData = JSON.parse(localStorage.getItem(STAFF_KEY)) || {}; } catch(e) { staffData = {}; }
+  if (!staffData.persons) staffData.persons = [];
+  if (!staffData.tasks) staffData.tasks = [];
+  if (!staffData.assignments) staffData.assignments = {};
+
+  const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  const taskName = fileName.replace(/\.xlsx$/i, '');
+  const taskDate = new Date().toISOString().slice(0, 10);
+
+  let task = staffData.tasks.find(t => t.name === taskName);
+  if (!task) {
+    task = { id: genId(), name: taskName, date: taskDate, scene: results.scene || 'other', addedAt: Date.now() };
+    staffData.tasks.push(task);
+  }
+
+  let newPersons = [];
+  for (const name of results.personNames) {
+    const cleanNames = name.includes('/') ? name.split('/') : [name];
+    for (const cn of cleanNames) {
+      const trimmed = cn.trim();
+      if (!trimmed) continue;
+      let person = staffData.persons.find(p => p.name === trimmed);
+      if (!person) {
+        person = { id: genId(), name: trimmed, gender: '', tag: 'normal', addedAt: Date.now() };
+        staffData.persons.push(person);
+        newPersons.push(trimmed);
+      }
+      const key = `${person.id}_${task.id}`;
+      if (!staffData.assignments[key]) staffData.assignments[key] = { status: 'working' };
+    }
+  }
+
+  localStorage.setItem(STAFF_KEY, JSON.stringify(staffData));
+  let msg = '已同步到人员管理';
+  if (newPersons.length > 0) msg += `（新增: ${newPersons.join('、')}）`;
+  showStatus('success', msg);
+}
 
 // Preprocess shuffled (乱序) data into standard raw format
 function preprocessShuffledData(sheet) {
