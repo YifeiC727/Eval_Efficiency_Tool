@@ -501,15 +501,34 @@ function preprocessShuffledData(sheet) {
     throw new Error('乱序格式缺少必要列（A/B/模型A/模型B/标注员名）');
   }
 
-  // Get rating format from config
-  const config = getActiveConfig();
-  const rf = config.ratingFormat;
+  // Auto-detect rating format from actual data (handles full-width brackets, case variants)
+  const rf = { good: 'G (Good)', as_good: 'As good', as_bad: 'As bad', bad: 'B (Bad)' };
+  const sampleVals = new Set();
+  for (let i = 0; i < Math.min(rows.length, 500); i++) {
+    for (const idx of dimColIndices) {
+      const v = rows[i][idx];
+      if (v) sampleVals.add(String(v).trim());
+    }
+  }
+  for (const v of sampleVals) {
+    const vl = v.toLowerCase();
+    if (vl.includes('good') && !vl.includes('as')) rf.good = v;
+    else if (vl.includes('bad') && !vl.includes('as')) rf.bad = v;
+    else if (vl.includes('as') && vl.includes('good')) rf.as_good = v;
+    else if (vl.includes('as') && vl.includes('bad')) rf.as_bad = v;
+  }
 
   // Find dimension columns (rating cols that need flipping)
+  // Use config dimensions + also scan headers for known dimension-like columns
+  const config = getActiveConfig();
+  const knownDimNames = new Set([
+    ...config.dimensions,
+    '指令遵从与增益', '动态与物理合理性', '镜头语言与跨镜连贯', '视觉美学', '声音效果', '综合评价',
+    '语义跟随', '初始世界一致性', '运动性', '空间时序一致性'
+  ]);
   const dimColIndices = [];
-  for (const dimName of config.dimensions) {
-    const idx = headers.indexOf(dimName);
-    if (idx >= 0) dimColIndices.push(idx);
+  for (let c = 0; c < headers.length; c++) {
+    if (headers[c] && knownDimNames.has(headers[c])) dimColIndices.push(c);
   }
 
   // Flip function
@@ -667,14 +686,17 @@ function processData() {
   const personCount = personData.length;
 
   // Detect partial persons and pad with nulls to align prompt indices
+  // Detect if seq is 0-based or 1-based
+  const firstSeq = parseInt(personData[0][0][seqCol]);
+  const seqOffset = firstSeq; // 0 if 0-based, 1 if 1-based
+
   for (let p = 0; p < personData.length; p++) {
     const seg = personData[p];
     if (seg.length < promptCount) {
       // Partial person: determine which prompts they covered
-      const startSeq = parseInt(seg[0][seqCol]);
       const paddedSeg = new Array(promptCount).fill(null);
       for (const row of seg) {
-        const idx = parseInt(row[seqCol]) - 1;
+        const idx = parseInt(row[seqCol]) - seqOffset;
         if (idx >= 0 && idx < promptCount) paddedSeg[idx] = row;
       }
       personData[p] = paddedSeg;
